@@ -1,23 +1,41 @@
 ---- MODULE mem_cluster ----
-EXTENDS TLC
+EXTENDS TLC, Integers
+
+CONSTANTS PagesCount, PageSize, ClusterSizePages
+
+ASSUME PagesCount \in Nat \ {0}
+ASSUME PageSize \in Nat \ {0}
+ASSUME ClusterSizePages \in Nat \ {0}
+ASSUME PagesCount % ClusterSizePages = 0
+
+SeqOfNElements(element, n) == [x \in 1..n |-> element]
 
 (*--algorithm mem_cluster
 
+variables
+  half_cluster_size_pages = ClusterSizePages \div 2,
+  memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)];
+
 begin
-  skip;
+
+print(memory_pages)
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "77889a1c" /\ chksum(tla) = "af3d9146")
-VARIABLE pc
+\* BEGIN TRANSLATION (chksum(pcal) = "143c28ab" /\ chksum(tla) = "ba11843c")
+VARIABLES pc, half_cluster_size_pages, memory_pages
 
-vars == << pc >>
+vars == << pc, half_cluster_size_pages, memory_pages >>
 
-Init == /\ pc = "Lbl_1"
+Init == (* Global variables *)
+        /\ half_cluster_size_pages = (ClusterSizePages \div 2)
+        /\ memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)]
+        /\ pc = "Lbl_1"
 
 Lbl_1 == /\ pc = "Lbl_1"
-         /\ TRUE
+         /\ PrintT((memory_pages))
          /\ pc' = "Done"
+         /\ UNCHANGED << half_cluster_size_pages, memory_pages >>
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == pc = "Done" /\ UNCHANGED vars
