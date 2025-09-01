@@ -22,8 +22,8 @@ variables
   memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)],
   user_buffer = SeqOfNElements(0, data_per_cluster_bytes),
 
-  page_mem_current_buf_offset = 0,
-  page_mem_current_page_idx = 0,
+  page_mem_current_buf_offset = 1,
+  page_mem_current_page_idx = 1,
   \* Если этот флаг стоит, то запись первого байта одновременно запишет 0 в crc кластера
   page_mem_mess_crc = FALSE,
   page_mem_status = "idle";
@@ -253,7 +253,7 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "3ba5cc34" /\ chksum(tla) = "a705949c")
+\* BEGIN TRANSLATION (chksum(pcal) = "e3ff659b" /\ chksum(tla) = "71689112")
 VARIABLES pages_per_half_cluster, pages_per_full_cluster, 
           data_per_cluster_bytes, memory_pages, user_buffer, 
           page_mem_current_buf_offset, page_mem_current_page_idx, 
@@ -276,8 +276,8 @@ Init == (* Global variables *)
         /\ data_per_cluster_bytes = pages_per_half_cluster * PageSize
         /\ memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)]
         /\ user_buffer = SeqOfNElements(0, data_per_cluster_bytes)
-        /\ page_mem_current_buf_offset = 0
-        /\ page_mem_current_page_idx = 0
+        /\ page_mem_current_buf_offset = 1
+        /\ page_mem_current_page_idx = 1
         /\ page_mem_mess_crc = FALSE
         /\ page_mem_status = "idle"
         (* Process cluster *)
@@ -433,18 +433,28 @@ Spec == /\ Init /\ [][Next]_vars
 
 \* END TRANSLATION
 
-ClusterStatusInvariant == status \in {
-  "st_free",
-  "st_error",
-  "st_read_begin",
-  "st_read_process",
-  "st_read_check_crc",
-  "st_write_begin",
-  "st_write_process",
-  "st_write_begin_2_half"
-}
+ClusterStatusInvariant ==
+  /\  status \in {
+        "st_free",
+        "st_error",
+        "st_read_begin",
+        "st_read_process",
+        "st_read_check_crc",
+        "st_write_begin",
+        "st_write_process",
+        "st_write_begin_2_half"
+      }
+   /\  next_status \in {
+        "st_free",
+        "st_write_begin_2_half"
+       }
 
-ClusterIndexInvariant == cluster_idx \in 0..(clusters_count - 1)
+
+ClusterIndexesInvariant ==
+  /\ cluster_idx \in 0..(clusters_count - 1)
+  \* /\ page_idx \in 0..(PageSize - 1)
+  \* /\ user_buf_offset \in 0..(2 * data_per_cluster_bytes)
+
 
 PageMemStatusInvariant == page_mem_status \in {
   "idle",
@@ -455,4 +465,12 @@ PageMemStatusInvariant == page_mem_status \in {
   "check_assert"
 }
 
+
+PageMemIndexesInvariant ==
+  /\ user_buf_start_offset \in 1..(2 * data_per_cluster_bytes)
+  /\ page_mem_current_page_idx \in 1..PagesCount
+  /\ page_mem_current_buf_offset \in 1..(2 * data_per_cluster_bytes + 1)
+  /\ current_byte_idx \in 1..(PageSize + 1)
+
 ====
+
