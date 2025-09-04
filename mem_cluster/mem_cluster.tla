@@ -18,7 +18,7 @@ variables
   pages_per_full_cluster = pages_per_half_cluster * 2,
   data_per_cluster_bytes = pages_per_half_cluster * PageSize,
 
-  half_clusters_count := get_half_clusters_count(PagesCount, PageSize, ClusterSize),
+  half_clusters_count = get_half_clusters_count(PagesCount, PageSize, ClusterSize),
 
   \* read write
   memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)],
@@ -36,46 +36,25 @@ variables
   page_mem_current_page_idx = 1,
   \* Если этот флаг стоит, то запись первого байта одновременно запишет 0 в crc кластера
   page_mem_mess_crc = FALSE,
-  page_mem_status = "idle",
+  page_mem_status = "idle";
 
-  first_half_cluster_content_ret = <<>>,
-  second_half_cluster_content_ret = <<>>;
-
-\* Записывает содержимое кластера с индексом clust_idx в переменные first_half_cluster_content_ret
-\* и second_half_cluster_content_ret
-\* Содержимое полукластеров будет представлено в плоском виде, т. е. не как последовательность
-\* страниц page_mem, а как их объединение в одну последовательность
-macro get_cluster_content(clust_idx) begin
-  first_half_cluster_content_ret := FlatSubSequences(
-    SequencePart(
-      memory_pages, 2 * clust_idx * pages_per_half_cluster + 1, pages_per_half_cluster
-    )
-  );
-  second_half_cluster_content_ret := FlatSubSequences(
-    SequencePart(
-      memory_pages, 2 * clust_idx + 1 * pages_per_half_cluster + 1, pages_per_half_cluster
-    )
-  )
-end macro;
-
-macro update_cluster_state_idx() begin
+macro update_cluster_state_idx(cluster_idx) begin
   \* Если это последняя страница в полукластере
   if user_buf_offset + PageSize >= ClusterSize then
     if next_status = "st_write_begin_2_half" then
       \* Первый полукластер в кластере
-      current_cluster_state_idx := 2 * cluster_idx + 1;
+      current_cluster_state_idx := get_half_cluster_idx(cluster_idx, 1);
     else
       \* Второй полукластер в кластере
-      current_cluster_state_idx := 2 * cluster_idx + 2;
+      current_cluster_state_idx := get_half_cluster_idx(cluster_idx, 2);
     end if;
   end if;
 end macro;
 
 macro validate_cluster_write(clust_idx) begin
-  get_cluster_content(clust_idx);
   assert status = "st_free" =>
-    /\ user_buffer = first_half_cluster_content_ret
-    /\ user_buffer = second_half_cluster_content_ret
+    /\ user_buffer = first_half_cluster_content(memory_pages, clust_idx, pages_per_half_cluster)
+    /\ user_buffer = second_half_cluster_content(memory_pages, clust_idx, pages_per_half_cluster)
 end macro;
 
 
@@ -231,7 +210,7 @@ begin
 
       or \* st_write_process
         await status = "st_write_process" /\ page_mem_status = "idle";
-        update_cluster_state_idx();
+        update_cluster_state_idx(cluster_idx);
 
         if user_buf_offset < ClusterSize then
           \* +1 - перевод в индексы с 1
@@ -344,26 +323,24 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "7b7e7204" /\ chksum(tla) = "c8d51996")
-VARIABLES pages_per_half_cluster, pages_per_full_cluster,
-          data_per_cluster_bytes, memory_pages, user_buffer, cluster_states,
-          current_cluster_state_idx, clusters_init,
-          page_mem_current_buf_offset, page_mem_current_page_idx,
-          page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret,
-          second_half_cluster_content_ret, clusters_count, allowed_values,
-          cluster_idx, next_status, status, page_idx, user_buf_offset,
-          crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok, current_byte_idx,
-          user_buf_start_offset
+\* BEGIN TRANSLATION (chksum(pcal) = "b933c568" /\ chksum(tla) = "8e74c847")
+VARIABLES pages_per_half_cluster, pages_per_full_cluster, 
+          data_per_cluster_bytes, half_clusters_count, memory_pages, 
+          user_buffer, cluster_states, current_cluster_state_idx, 
+          clusters_init, page_mem_current_buf_offset, 
+          page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, 
+          clusters_count, allowed_values, cluster_idx, next_status, status, 
+          page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, 
+          ee_crc_2_ok, current_byte_idx, user_buf_start_offset
 
-vars == << pages_per_half_cluster, pages_per_full_cluster,
-           data_per_cluster_bytes, memory_pages, user_buffer, cluster_states,
-           current_cluster_state_idx, clusters_init,
-           page_mem_current_buf_offset, page_mem_current_page_idx,
-           page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret,
-           second_half_cluster_content_ret, clusters_count, allowed_values,
-           cluster_idx, next_status, status, page_idx, user_buf_offset,
-           crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok, current_byte_idx,
-           user_buf_start_offset >>
+vars == << pages_per_half_cluster, pages_per_full_cluster, 
+           data_per_cluster_bytes, half_clusters_count, memory_pages, 
+           user_buffer, cluster_states, current_cluster_state_idx, 
+           clusters_init, page_mem_current_buf_offset, 
+           page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, 
+           clusters_count, allowed_values, cluster_idx, next_status, status, 
+           page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, 
+           ee_crc_2_ok, current_byte_idx, user_buf_start_offset >>
 
 ProcSet == {"Cluster"} \cup {"PageMem"}
 
@@ -371,17 +348,16 @@ Init == (* Global variables *)
         /\ pages_per_half_cluster = (ClusterSize \div PageSize)
         /\ pages_per_full_cluster = pages_per_half_cluster * 2
         /\ data_per_cluster_bytes = pages_per_half_cluster * PageSize
+        /\ half_clusters_count = get_half_clusters_count(PagesCount, PageSize, ClusterSize)
         /\ memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)]
         /\ user_buffer = SeqOfNElements(0, data_per_cluster_bytes)
-        /\ cluster_states = [state \in 1..((PagesCount * PageSize) \div ClusterSize) |-> FALSE]
+        /\ cluster_states = [state \in 1..half_clusters_count |-> FALSE]
         /\ current_cluster_state_idx = NULL
-        /\ clusters_init = [state \in 1..((PagesCount * PageSize) \div ClusterSize) |-> FALSE]
+        /\ clusters_init = [state \in 1..half_clusters_count |-> FALSE]
         /\ page_mem_current_buf_offset = 1
         /\ page_mem_current_page_idx = 1
         /\ page_mem_mess_crc = FALSE
         /\ page_mem_status = "idle"
-        /\ first_half_cluster_content_ret = <<>>
-        /\ second_half_cluster_content_ret = <<>>
         (* Process cluster *)
         /\ clusters_count = PagesCount \div (pages_per_half_cluster * 2)
         /\ allowed_values = 2..4
@@ -399,18 +375,18 @@ Init == (* Global variables *)
         /\ user_buf_start_offset = 1
 
 cluster == /\ \/ /\ TRUE
-                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx, next_status, status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, cluster_idx, next_status, status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_free"
                  /\ \E idx \in 0..(clusters_count - 1):
                       cluster_idx' = idx
                  /\ user_buffer' = SeqOfNElements(777, 2 * data_per_cluster_bytes)
                  /\ status' = "st_read_begin"
-                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, next_status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, next_status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_read_begin"
                  /\ page_idx' = 2 * cluster_idx * pages_per_half_cluster
                  /\ user_buf_offset' = 0
                  /\ status' = "st_read_process"
-                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx, next_status, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, cluster_idx, next_status, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_read_process" /\ page_mem_status = "idle"
                  /\ IF user_buf_offset < 2 * ClusterSize
                        THEN /\ page_mem_current_buf_offset' = user_buf_offset + 1
@@ -420,11 +396,11 @@ cluster == /\ \/ /\ TRUE
                             /\ page_idx' = page_idx + 1
                             /\ UNCHANGED status
                        ELSE /\ status' = "st_read_check_crc"
-                            /\ UNCHANGED << page_mem_current_buf_offset,
-                                            page_mem_current_page_idx,
-                                            page_mem_status, page_idx,
+                            /\ UNCHANGED << page_mem_current_buf_offset, 
+                                            page_mem_current_page_idx, 
+                                            page_mem_status, page_idx, 
                                             user_buf_offset >>
-                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_mess_crc, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx, next_status, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_mess_crc, cluster_idx, next_status, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_read_check_crc"
                  /\ crc_1_ok' = (Cardinality(ToSet(SequencePart(user_buffer, 1, ClusterSize - 1))) = 1)
                  /\ crc_2_ok' = (Cardinality(ToSet(SequencePart(user_buffer, ClusterSize + 1, ClusterSize - 1))) = 1)
@@ -436,43 +412,43 @@ cluster == /\ \/ /\ TRUE
                           LET second_half_state == cluster_states[2 + 2 * cluster_idx] IN
                             IF crc_1_ok' /\ ee_crc_1_ok'
                                THEN /\ IF crc_2_ok' /\ ee_crc_2_ok'
-                                          THEN /\ Assert(first_half_state /\ second_half_state,
-                                                         "Failure of assertion at line 173, column 15.")
+                                          THEN /\ Assert(first_half_state /\ second_half_state, 
+                                                         "Failure of assertion at line 149, column 15.")
                                                /\ status' = "st_free"
-                                               /\ UNCHANGED << next_status,
-                                                               page_idx,
+                                               /\ UNCHANGED << next_status, 
+                                                               page_idx, 
                                                                user_buf_offset >>
-                                          ELSE /\ Assert(first_half_state /\ ~second_half_state,
-                                                         "Failure of assertion at line 176, column 15.")
+                                          ELSE /\ Assert(first_half_state /\ ~second_half_state, 
+                                                         "Failure of assertion at line 152, column 15.")
                                                /\ user_buf_offset' = 0
                                                /\ page_idx' = (2 * cluster_idx + 1) * pages_per_half_cluster
                                                /\ next_status' = "st_free"
                                                /\ status' = "st_write_process"
                                     /\ UNCHANGED user_buffer
                                ELSE /\ IF crc_2_ok' /\ ee_crc_2_ok'
-                                          THEN /\ Assert(~first_half_state /\ second_half_state,
-                                                         "Failure of assertion at line 187, column 15.")
+                                          THEN /\ Assert(~first_half_state /\ second_half_state, 
+                                                         "Failure of assertion at line 163, column 15.")
                                                /\ user_buf_offset' = 0
                                                /\ page_idx' = 2 * cluster_idx * pages_per_half_cluster
                                                /\ next_status' = "st_free"
                                                /\ status' = "st_write_process"
                                                /\ UNCHANGED user_buffer
                                           ELSE /\ Assert(\/ crc_2_ok' /\ ee_crc_2_ok'
-                                                         \/ ~first_half_init /\ ~second_half_init,
-                                                         "Failure of assertion at line 197, column 15.")
+                                                         \/ ~first_half_init /\ ~second_half_init, 
+                                                         "Failure of assertion at line 173, column 15.")
                                                /\ user_buffer' = SeqOfNElements(Min(allowed_values), data_per_cluster_bytes)
                                                /\ status' = "st_write_begin"
-                                               /\ UNCHANGED << next_status,
-                                                               page_idx,
+                                               /\ UNCHANGED << next_status, 
+                                                               page_idx, 
                                                                user_buf_offset >>
-                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx>>
+                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, cluster_idx>>
               \/ /\ status = "st_free"
                  /\ \E idx \in 0..(clusters_count - 1):
                       cluster_idx' = idx
                  /\ \E data \in allowed_values:
                       user_buffer' = SeqOfNElements(data, data_per_cluster_bytes)
                  /\ status' = "st_write_begin"
-                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, next_status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, next_status, page_idx, user_buf_offset, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_write_begin"
                  /\ page_idx' = 2 * cluster_idx * pages_per_half_cluster
                  /\ user_buf_offset' = 0
@@ -480,12 +456,12 @@ cluster == /\ \/ /\ TRUE
                  /\ page_mem_mess_crc' = TRUE
                  /\ next_status' = "st_write_begin_2_half"
                  /\ status' = "st_write_process"
-                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+                 /\ UNCHANGED <<current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_status, cluster_idx, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_write_process" /\ page_mem_status = "idle"
                  /\ IF user_buf_offset + PageSize >= ClusterSize
                        THEN /\ IF next_status = "st_write_begin_2_half"
-                                  THEN /\ current_cluster_state_idx' = 2 * cluster_idx + 1
-                                  ELSE /\ current_cluster_state_idx' = 2 * cluster_idx + 2
+                                  THEN /\ current_cluster_state_idx' = get_half_cluster_idx(cluster_idx, 1)
+                                  ELSE /\ current_cluster_state_idx' = get_half_cluster_idx(cluster_idx, 2)
                        ELSE /\ TRUE
                             /\ UNCHANGED current_cluster_state_idx
                  /\ IF user_buf_offset < ClusterSize
@@ -494,27 +470,15 @@ cluster == /\ \/ /\ TRUE
                             /\ page_mem_status' = "start_write"
                             /\ user_buf_offset' = user_buf_offset + PageSize
                             /\ page_idx' = page_idx + 1
-                            /\ UNCHANGED << first_half_cluster_content_ret,
-                                            second_half_cluster_content_ret,
-                                            status >>
+                            /\ UNCHANGED status
                        ELSE /\ status' = next_status
-                            /\ first_half_cluster_content_ret' =                                   FlatSubSequences(
-                                                                   SequencePart(
-                                                                     memory_pages, 2 * cluster_idx * pages_per_half_cluster + 1, pages_per_half_cluster
-                                                                   )
-                                                                 )
-                            /\ second_half_cluster_content_ret' =                                    FlatSubSequences(
-                                                                    SequencePart(
-                                                                      memory_pages, 2 * cluster_idx + 1 * pages_per_half_cluster + 1, pages_per_half_cluster
-                                                                    )
-                                                                  )
                             /\ Assert(     status' = "st_free" =>
-                                      /\ user_buffer = first_half_cluster_content_ret'
-                                      /\ user_buffer = second_half_cluster_content_ret',
-                                      "Failure of assertion at line 79, column 3 of macro called at line 249, column 11.")
-                            /\ UNCHANGED << page_mem_current_buf_offset,
-                                            page_mem_current_page_idx,
-                                            page_mem_status, page_idx,
+                                      /\ user_buffer = first_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster)
+                                      /\ user_buffer = second_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster), 
+                                      "Failure of assertion at line 55, column 3 of macro called at line 225, column 11.")
+                            /\ UNCHANGED << page_mem_current_buf_offset, 
+                                            page_mem_current_page_idx, 
+                                            page_mem_status, page_idx, 
                                             user_buf_offset >>
                  /\ UNCHANGED <<user_buffer, page_mem_mess_crc, cluster_idx, next_status, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
               \/ /\ status = "st_write_begin_2_half"
@@ -522,11 +486,11 @@ cluster == /\ \/ /\ TRUE
                  /\ page_idx' = (2 * cluster_idx + 1) * pages_per_half_cluster
                  /\ next_status' = "st_free"
                  /\ status' = "st_write_process"
-                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, first_half_cluster_content_ret, second_half_cluster_content_ret, cluster_idx, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
-           /\ UNCHANGED << pages_per_half_cluster, pages_per_full_cluster,
-                           data_per_cluster_bytes, memory_pages,
-                           cluster_states, clusters_init, clusters_count,
-                           allowed_values, current_byte_idx,
+                 /\ UNCHANGED <<user_buffer, current_cluster_state_idx, page_mem_current_buf_offset, page_mem_current_page_idx, page_mem_mess_crc, page_mem_status, cluster_idx, crc_1_ok, crc_2_ok, ee_crc_1_ok, ee_crc_2_ok>>
+           /\ UNCHANGED << pages_per_half_cluster, pages_per_full_cluster, 
+                           data_per_cluster_bytes, half_clusters_count, 
+                           memory_pages, cluster_states, clusters_init, 
+                           clusters_count, allowed_values, current_byte_idx, 
                            user_buf_start_offset >>
 
 page_mem == /\ \/ /\ page_mem_status = "idle"
@@ -572,27 +536,26 @@ page_mem == /\ \/ /\ page_mem_status = "idle"
                                         /\ clusters_init' = [clusters_init EXCEPT ![current_cluster_state_idx] = TRUE]
                                         /\ current_cluster_state_idx' = NULL
                                    ELSE /\ TRUE
-                                        /\ UNCHANGED << cluster_states,
-                                                        current_cluster_state_idx,
+                                        /\ UNCHANGED << cluster_states, 
+                                                        current_cluster_state_idx, 
                                                         clusters_init >>
                              /\ page_mem_status' = "check_assert"
                         ELSE /\ TRUE
-                             /\ UNCHANGED << cluster_states,
-                                             current_cluster_state_idx,
+                             /\ UNCHANGED << cluster_states, 
+                                             current_cluster_state_idx, 
                                              clusters_init, page_mem_status >>
                   /\ UNCHANGED <<user_buffer, page_mem_mess_crc, user_buf_start_offset>>
                \/ /\ page_mem_status = "check_assert"
                   /\ Assert(       memory_pages[page_mem_current_page_idx] = SequencePart(
                               user_buffer, user_buf_start_offset, PageSize
-                            ), "Failure of assertion at line 339, column 9.")
+                            ), "Failure of assertion at line 315, column 9.")
                   /\ page_mem_status' = "idle"
                   /\ UNCHANGED <<memory_pages, user_buffer, cluster_states, current_cluster_state_idx, clusters_init, page_mem_current_buf_offset, page_mem_mess_crc, current_byte_idx, user_buf_start_offset>>
-            /\ UNCHANGED << pages_per_half_cluster, pages_per_full_cluster,
-                            data_per_cluster_bytes, page_mem_current_page_idx,
-                            first_half_cluster_content_ret,
-                            second_half_cluster_content_ret, clusters_count,
-                            allowed_values, cluster_idx, next_status, status,
-                            page_idx, user_buf_offset, crc_1_ok, crc_2_ok,
+            /\ UNCHANGED << pages_per_half_cluster, pages_per_full_cluster, 
+                            data_per_cluster_bytes, half_clusters_count, 
+                            page_mem_current_page_idx, clusters_count, 
+                            allowed_values, cluster_idx, next_status, status, 
+                            page_idx, user_buf_offset, crc_1_ok, crc_2_ok, 
                             ee_crc_1_ok, ee_crc_2_ok >>
 
 Next == cluster \/ page_mem
