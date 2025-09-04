@@ -19,7 +19,10 @@ ReduceSequence(seq, op(_, _), acc) ==
 
 \* Делает плоской последовательность последовательностей
 \* <<<<1, 2, 3>>, <<4, 5, 6>> -> <<1, 2, 3, 4, 5, 6>>
-FlatSubSequences(seq_of_seq) ==
-  ReduceSequence(seq_of_seq, \o, <<>>)
+FlatSubSequences(seq_of_seq) == ReduceSequence(seq_of_seq, \o, <<>>)
+
+Range(seq) == {seq[i]: i \in DOMAIN seq}
+
+Min(set) == CHOOSE x \in set: \A el \in set: x <= el
 
 ====
