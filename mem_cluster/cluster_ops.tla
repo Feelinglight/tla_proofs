@@ -45,8 +45,7 @@ get_half_cluster_idx(cluster_idx, half_cluster_idx) ==
   IF half_cluster_idx \in {1, 2}
     THEN 2 * cluster_idx + half_cluster_idx
   ELSE
-    /\ Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
-    /\ TRUE
+    Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
 
 
 ====
