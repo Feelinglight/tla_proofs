@@ -6,6 +6,7 @@ get_half_clusters_count(pages_count, page_size, cluster_size) ==
 
 \* Первая страница полукластера half_cluster_idx в кластере cluster_idx
 \* cluster_idx с 0
+\* half_cluster_idx 1 или 2
 \* Return с 0
 get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, half_cluster_idx) ==
   IF half_cluster_idx \in {1, 2} THEN
