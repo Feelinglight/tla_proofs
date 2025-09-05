@@ -1,5 +1,5 @@
 ---- MODULE cluster_ops ----
-EXTENDS TLC, Integers, Sequences, utils
+EXTENDS TLC, Integers, Sequences, utils, FiniteSets, SequencesExt
 
 get_half_clusters_count(pages_count, page_size, cluster_size) ==
   (pages_count * page_size) \div cluster_size
@@ -42,10 +42,25 @@ second_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) =
 \* half_cluster_idx 1 или 2
 \* Return с 1
 get_half_cluster_idx(cluster_idx, half_cluster_idx) ==
-  IF half_cluster_idx \in {1, 2}
-    THEN 2 * cluster_idx + half_cluster_idx
+  IF half_cluster_idx \in {1, 2} THEN
+    2 * cluster_idx + half_cluster_idx
   ELSE
     Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
+
+
+\* Возвращает TRUE если crc данных в полукластере валидны, иначе FALSE
+\* crc валидна, если все числа в полукластере одинаковые
+\* cluster_idx с 0
+\* half_cluster_idx 1 или 2
+half_cluster_crc_ok(buffer, cluster_size, half_cluster_idx) ==
+  IF half_cluster_idx \in {1, 2} THEN
+    LET
+      half_cluster_start == IF half_cluster_idx = 1 THEN 1 ELSE cluster_size + 1
+    IN
+      Cardinality(ToSet(SequencePart(buffer, half_cluster_start, cluster_size - 1))) = 1
+  ELSE
+    Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
+
 
 
 ====
