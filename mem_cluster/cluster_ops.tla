@@ -4,17 +4,14 @@ EXTENDS TLC, Integers, Sequences, utils, FiniteSets, SequencesExt
 get_half_clusters_count(pages_count, page_size, cluster_size) ==
   (pages_count * page_size) \div cluster_size
 
-\* Смещение первого полукластера кластера cluster_idx в плоском массиве памяти
+\* Первая страница полукластера half_cluster_idx в кластере cluster_idx
 \* cluster_idx с 0
 \* Return с 0
-get_first_half_cluster_offset(cluster_idx, pages_per_half_cluster) ==
-  2 * cluster_idx * pages_per_half_cluster
-
-\* Смещение второго полукластера кластера cluster_idx в плоском массиве памяти
-\* cluster_idx с 0
-\* Return с 0
-get_second_half_cluster_offset(cluster_idx, pages_per_half_cluster) ==
-  (2 * cluster_idx + 1) * pages_per_half_cluster
+get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, half_cluster_idx) ==
+  IF half_cluster_idx \in {1, 2} THEN
+    (2 * cluster_idx + half_cluster_idx - 1) * pages_per_half_cluster
+  ELSE
+    Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
 
 \* Возвращает содержимое полукластеров будет представлено в плоском виде, т. е. не как
 \* последовательность страниц page_mem, а как их объединение в одну последовательность
@@ -23,7 +20,7 @@ first_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) ==
   FlatSubSequences(
     SequencePart(
       memory_pages,
-      get_first_half_cluster_offset(cluster_idx, pages_per_half_cluster) + 1,
+      get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 1) + 1,
       pages_per_half_cluster
     )
   )
@@ -32,7 +29,7 @@ second_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) =
   FlatSubSequences(
     SequencePart(
       memory_pages,
-      get_second_half_cluster_offset(cluster_idx, pages_per_half_cluster) + 1,
+      get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2) + 1,
       pages_per_half_cluster
     )
   )
@@ -61,6 +58,11 @@ half_cluster_crc_ok(buffer, cluster_size, half_cluster_idx) ==
   ELSE
     Assert(half_cluster_idx \in {1, 2}, "Индекс полукластера должен быть 1 или 2")
 
+  \* idx \in 0..(clusters_count - 1) IN idx
+
+        \* with idx \in 0..(clusters_count - 1) do
+        \*   cluster_idx := idx;
+        \* end with;
 
 
 ====
