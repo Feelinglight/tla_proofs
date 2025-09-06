@@ -106,8 +106,9 @@ begin
   ClusterTick:
     while TRUE do
       either \* Прерывание работы mem_cluster
-        \* status := "st_free";
-        skip;
+        await status = "st_init";
+
+        status := "st_free";
 
       \* ---------- Чтение ----------
       or \* Запрос на чтение
@@ -163,6 +164,7 @@ begin
               assert
                 /\ first_half_state /\ second_half_state
                 /\ half_clusters_equal(user_buffer, ClusterSize);
+
               status := "st_free";
             else
               assert first_half_state /\ ~second_half_state;
@@ -269,7 +271,12 @@ variables
 begin
   PageMemTick:
     while TRUE do
-      either \* idle
+      either \* init
+        await page_mem_status = "init";
+
+        page_mem_status := "idle";
+
+      or \* idle
         await page_mem_status = "idle";
 
       \* ---------- Чтение ----------
