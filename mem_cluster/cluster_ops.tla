@@ -35,6 +35,15 @@ second_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) =
     )
   )
 
+full_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) ==
+  FlatSubSequences(
+    SequencePart(
+      memory_pages,
+      get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 1) + 1,
+      pages_per_half_cluster * 2
+    )
+  )
+
 \* Возвращает индекс первого, либо второго полукластера кластера cluster_idx
 \* cluster_idx с 0
 \* half_cluster_idx 1 или 2

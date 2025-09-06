@@ -139,7 +139,12 @@ begin
 
           user_buf_offset := user_buf_offset + PageSize;
           page_idx := page_idx + 1;
+          \* NOTE: Можно проверять что страница считалась правильно
+
         else
+          assert user_buffer = full_cluster_content(
+            memory_pages, cluster_idx, pages_per_half_cluster
+          );
           status := "st_read_check_crc";
         end if;
       or \* st_read_check_crc
@@ -233,9 +238,11 @@ begin
 
           user_buf_offset := user_buf_offset + PageSize;
           page_idx := page_idx + 1;
+          \* NOTE: Можно проверять что страница записалась правильно
         else
           status := next_status;
           validate_cluster_write(cluster_idx);
+          \* NOTE: Можно проверять что отдельные полукластеры записались правильно
         end if;
       or \* st_write_begin_2_half
         await status = "st_write_begin_2_half";
@@ -327,7 +334,7 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "3afa0f11" /\ chksum(tla) = "95426ec7")
+\* BEGIN TRANSLATION (chksum(pcal) = "42f89cb8" /\ chksum(tla) = "67ae7295")
 VARIABLES pages_per_half_cluster, data_per_half_cluster_bytes, 
           half_clusters_count, init_memory_value, memory_pages, user_buffer, 
           cluster_states, current_cluster_state_idx, 
@@ -398,7 +405,11 @@ cluster == /\ \/ /\ TRUE
                             /\ user_buf_offset' = user_buf_offset + PageSize
                             /\ page_idx' = page_idx + 1
                             /\ UNCHANGED status
-                       ELSE /\ status' = "st_read_check_crc"
+                       ELSE /\ Assert(       user_buffer = full_cluster_content(
+                                        memory_pages, cluster_idx, pages_per_half_cluster
+                                      ), 
+                                      "Failure of assertion at line 145, column 11.")
+                            /\ status' = "st_read_check_crc"
                             /\ UNCHANGED << page_mem_current_buf_offset, 
                                             page_mem_current_page_idx, 
                                             page_mem_status, page_idx, 
@@ -414,13 +425,13 @@ cluster == /\ \/ /\ TRUE
                         IF crc_1_ok' /\ ee_crc_1_ok'
                            THEN /\ IF crc_2_ok' /\ ee_crc_2_ok'
                                       THEN /\ Assert(first_half_state /\ second_half_state, 
-                                                     "Failure of assertion at line 158, column 15.")
+                                                     "Failure of assertion at line 163, column 15.")
                                            /\ status' = "st_free"
                                            /\ UNCHANGED << next_status, 
                                                            page_idx, 
                                                            user_buf_offset >>
                                       ELSE /\ Assert(first_half_state /\ ~second_half_state, 
-                                                     "Failure of assertion at line 161, column 15.")
+                                                     "Failure of assertion at line 166, column 15.")
                                            /\ user_buf_offset' = 0
                                            /\ page_idx' = get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2)
                                            /\ next_status' = "st_free"
@@ -428,7 +439,7 @@ cluster == /\ \/ /\ TRUE
                                 /\ UNCHANGED user_buffer
                            ELSE /\ IF crc_2_ok' /\ ee_crc_2_ok'
                                       THEN /\ Assert(~first_half_state /\ second_half_state, 
-                                                     "Failure of assertion at line 172, column 15.")
+                                                     "Failure of assertion at line 177, column 15.")
                                            /\ user_buf_offset' = 0
                                            /\ page_idx' = get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2)
                                            /\ next_status' = "st_free"
@@ -436,7 +447,7 @@ cluster == /\ \/ /\ TRUE
                                            /\ UNCHANGED user_buffer
                                       ELSE /\ Assert(\/ crc_2_ok' /\ ee_crc_2_ok'
                                                      \/ first_half_state = NULL /\ second_half_state = NULL, 
-                                                     "Failure of assertion at line 182, column 15.")
+                                                     "Failure of assertion at line 187, column 15.")
                                            /\ user_buffer' = SeqOfNElements(Min(allowed_values), data_per_half_cluster_bytes)
                                            /\ status' = "st_write_begin"
                                            /\ UNCHANGED << next_status, 
@@ -477,7 +488,7 @@ cluster == /\ \/ /\ TRUE
                             /\ Assert(     status' = "st_free" =>
                                       /\ user_buffer = first_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster)
                                       /\ user_buffer = second_half_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster), 
-                                      "Failure of assertion at line 51, column 3 of macro called at line 238, column 11.")
+                                      "Failure of assertion at line 51, column 3 of macro called at line 244, column 11.")
                             /\ UNCHANGED << page_mem_current_buf_offset, 
                                             page_mem_current_page_idx, 
                                             page_mem_status, page_idx, 
@@ -512,7 +523,7 @@ page_mem == /\ \/ /\ page_mem_status = "idle"
                         THEN /\ Assert(       memory_pages[page_mem_current_page_idx] = SequencePart(
                                          user_buffer', user_buf_start_offset, PageSize
                                        ), 
-                                       "Failure of assertion at line 67, column 3 of macro called at line 283, column 11.")
+                                       "Failure of assertion at line 67, column 3 of macro called at line 290, column 11.")
                              /\ page_mem_status' = "idle"
                         ELSE /\ TRUE
                              /\ UNCHANGED page_mem_status
@@ -551,7 +562,7 @@ page_mem == /\ \/ /\ page_mem_status = "idle"
                              /\ Assert(       memory_pages'[page_mem_current_page_idx] = SequencePart(
                                          user_buffer, user_buf_start_offset, PageSize
                                        ), 
-                                       "Failure of assertion at line 67, column 3 of macro called at line 320, column 11.")
+                                       "Failure of assertion at line 67, column 3 of macro called at line 327, column 11.")
                              /\ page_mem_status' = "idle"
                         ELSE /\ TRUE
                              /\ UNCHANGED << cluster_states, 
