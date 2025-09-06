@@ -44,6 +44,14 @@ full_cluster_content(memory_pages, cluster_idx, pages_per_half_cluster) ==
     )
   )
 
+\* Принимает buffer, в котором записаны 2 полукластера. Возвращает TRUE если полукластеры
+\* равны, иначе FALSE
+half_clusters_equal(buffer, half_cluster_size) ==
+    SequencePart(buffer, 1, half_cluster_size) = SequencePart(
+      buffer, half_cluster_size + 1, half_cluster_size
+    )
+
+
 \* Возвращает индекс первого, либо второго полукластера кластера cluster_idx
 \* cluster_idx с 0
 \* half_cluster_idx 1 или 2

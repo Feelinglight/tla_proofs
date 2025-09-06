@@ -160,7 +160,9 @@ begin
 
             if crc_2_ok /\ ee_crc_2_ok then
               \* Все ок
-              assert first_half_state /\ second_half_state;
+              assert
+                /\ first_half_state /\ second_half_state
+                /\ half_clusters_equal(user_buffer, ClusterSize);
               status := "st_free";
             else
               assert first_half_state /\ ~second_half_state;
@@ -175,7 +177,7 @@ begin
           else
             if crc_2_ok /\ ee_crc_2_ok then
               assert ~first_half_state /\ second_half_state;
-              \* 2 -> 1
+              \* Копируем 2 -> 1
               user_buf_offset := 0;
               page_idx := get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2);
 
@@ -243,6 +245,7 @@ begin
           status := next_status;
           validate_cluster_write(cluster_idx);
           \* NOTE: Можно проверять что отдельные полукластеры записались правильно
+          \* NOTE: Можно проверять вычисляемая и записанная crc валидны
         end if;
       or \* st_write_begin_2_half
         await status = "st_write_begin_2_half";
