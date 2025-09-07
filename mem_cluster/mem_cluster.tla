@@ -74,7 +74,7 @@ macro set_half_cluster_state(state) begin
   if current_cluster_state_idx /= NULL then
     if ~state /\ cluster_states[current_cluster_state_idx] = NULL then
       \* Неинициализированные кластеры не нужно переводить в состояние FALSE
-      skip
+      current_cluster_state_idx := NULL;
     else
       cluster_states[current_cluster_state_idx] := state;
       current_cluster_state_idx := NULL;
