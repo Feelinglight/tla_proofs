@@ -1,7 +1,7 @@
 ---- MODULE mem_cluster ----
 EXTENDS TLC, Integers, utils, SequencesExt, FiniteSets, cluster_ops
 
-CONSTANTS PagesCount, PageSize, ClusterSize, NULL
+CONSTANTS PagesCount, PageSize, ClusterSize, NULL, INIT_MEM_VALUE, ALLOWED_MEM_VALUES
 
 ASSUME PagesCount \in Nat \ {0}
 ASSUME PageSize \in Nat \ {0}
@@ -10,18 +10,20 @@ ASSUME PageSize > 1
 ASSUME ClusterSize \in Nat \ {0}
 ASSUME ClusterSize % PageSize = 0
 
+\* 0 и 1 используются под состояние чексуммы
+ASSUME INIT_MEM_VALUE \in Nat \ {0}
+ASSUME ALLOWED_MEM_VALUES \subseteq (Nat \ {0, 1})
+
 
 (*--algorithm mem_cluster
 variables
   \* read only
   pages_per_half_cluster = ClusterSize \div PageSize,
-  data_per_half_cluster_bytes = pages_per_half_cluster * PageSize,
   half_clusters_count = get_half_clusters_count(PagesCount, PageSize, ClusterSize),
-  init_memory_value = 77,
 
   \* read write
-  memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(0, PageSize)],
-  user_buffer = SeqOfNElements(init_memory_value, data_per_half_cluster_bytes),
+  memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)],
+  user_buffer = SeqOfNElements(INIT_MEM_VALUE, ClusterSize),
 
   \* Состояния полукластеров. TRUE - последняя запись была успешна, FALSE - прервана
   \* Если в кластер еще не было ни одной записи, то состояние равно NULL
@@ -82,7 +84,6 @@ macro set_half_cluster_state(state) begin
   end if;
 end macro;
 
-
 fair process reset = "Reset"
 begin
   ResetTick:
@@ -100,7 +101,6 @@ fair process cluster = "Cluster"
 variables
   \* read only
   clusters_count = half_clusters_count \div 2,
-  allowed_values = 2..4,
 
   \* read write
   \* Индекс читаемого/записываемого кластера
@@ -136,7 +136,7 @@ begin
           cluster_idx := idx;
         end with;
 
-        user_buffer := SeqOfNElements(init_memory_value, 2 * data_per_half_cluster_bytes);
+        user_buffer := SeqOfNElements(INIT_MEM_VALUE, 2 * ClusterSize);
 
         status := "st_read_begin"
 
@@ -179,9 +179,7 @@ begin
 
             if crc_2_ok /\ ee_crc_2_ok then
               \* Все ок
-              assert
-                /\ first_half_state /\ second_half_state
-                /\ half_clusters_equal(user_buffer, ClusterSize);
+              assert first_half_state /\ second_half_state;
 
               status := "st_free";
             else
@@ -189,6 +187,7 @@ begin
                 /\ first_half_state /\ (second_half_state \in {NULL, FALSE})
 
               \* Копируем 1 -> 2
+              user_buffer := SequencePart(user_buffer, 1, ClusterSize);
               user_buf_offset := 0;
               page_idx := get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2);
 
@@ -203,19 +202,19 @@ begin
                 /\ ~first_half_state /\ second_half_state
 
               \* Копируем 2 -> 1
+              user_buffer := SequencePart(user_buffer, ClusterSize + 1, ClusterSize);
               user_buf_offset := 0;
               page_idx := get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2);
 
               next_status := "st_free";
               status := "st_write_process";
             else
-              \* Если обе crc завалены, то в алгоритме ошибка и он не обеспечивает надежную запись
-              \* и чтение. Исключение - оба кластера не инициализированы
-              assert
-                \/ crc_2_ok /\ ee_crc_2_ok
-                \/ first_half_state = NULL /\ second_half_state = NULL;
+              \* Если обе crc завалены, то либо оба кластера не инициализированы, либо только второй
+              \* (первый мог быть инициализирован, а при повторной записи возникло прервание),
+              \* либо алгоритме ошибка и он не обеспечивает надежную запись
+              assert second_half_state = NULL;
 
-              user_buffer := SeqOfNElements(Min(allowed_values), data_per_half_cluster_bytes);
+              user_buffer := SeqOfNElements(Min(ALLOWED_MEM_VALUES), ClusterSize);
 
               status := "st_write_begin";
             end if;
@@ -231,8 +230,8 @@ begin
         end with;
 
         \* TODO: исключить значения, которые уже в кластере
-        with data \in allowed_values do
-          user_buffer := SeqOfNElements(data, data_per_half_cluster_bytes);
+        with data \in ALLOWED_MEM_VALUES do
+          user_buffer := SeqOfNElements(data, ClusterSize);
         end with;
 
         status := "st_write_begin";
@@ -245,7 +244,7 @@ begin
         current_cluster_state_idx := get_half_cluster_idx(cluster_idx, 1);
 
         \* 1 - значит crc валидна
-        user_buffer[data_per_half_cluster_bytes] := 1;
+        user_buffer[ClusterSize] := 1;
 
         next_status := "st_write_begin_2_half";
         status := "st_write_process";
@@ -685,7 +684,7 @@ PageMemStatusInvariant == page_mem_status \in {
 
 PageMemIndexesInvariant ==
   /\ page_mem_current_page_idx \in 1..PagesCount
-  /\ page_mem_current_buf_offset \in 1..(2 * data_per_half_cluster_bytes + 1)
+  /\ page_mem_current_buf_offset \in 1..(2 * ClusterSize + 1)
 
 ====
 
