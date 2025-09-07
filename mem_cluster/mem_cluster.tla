@@ -65,7 +65,7 @@ end macro;
 
 macro validate_page_mem_op() begin
   assert memory_pages[page_mem_current_page_idx] = SequencePart(
-    user_buffer, user_buf_start_offset, PageSize
+    user_buffer, page_mem_current_buf_offset, PageSize
   );
 end macro;
 
@@ -286,11 +286,6 @@ begin
 end process;
 
 process page_mem = "PageMem"
-variables
-  current_byte_idx = 1;
-  \* Нужен только для ассертов
-  user_buf_start_offset = 1;
-
 begin
   PageMemTick:
     while TRUE do
@@ -305,14 +300,6 @@ begin
       \* ---------- Чтение ----------
       or \* start_read
         await page_mem_status = "start_read";
-
-        user_buf_start_offset := page_mem_current_buf_offset;
-        current_byte_idx := 1;
-
-        page_mem_status := "read_head";
-
-      or \* read_head
-        await page_mem_status = "read_head";
 
         user_buffer[page_mem_current_buf_offset] := memory_pages[page_mem_current_page_idx][1];
 
@@ -346,28 +333,30 @@ begin
           else
             memory_pages[page_mem_current_page_idx][1] := user_buffer[page_mem_current_buf_offset];
           end if;
+
           page_mem_mess_crc := FALSE;
         end with;
 
-        user_buf_start_offset := page_mem_current_buf_offset;
-        current_byte_idx := 2;
-        page_mem_current_buf_offset := page_mem_current_buf_offset + 1;
+        page_mem_status := "write_middle";
+      or \* write_middle
+        await page_mem_status = "write_middle";
 
-        page_mem_status := "write";
-      or \* write
-        await page_mem_status = "write";
+        memory_pages[page_mem_current_page_idx] := <<user_buffer[page_mem_current_buf_offset]>> \o
+          SequencePart(user_buffer, page_mem_current_buf_offset + 1, PageSize - 2) \o
+          <<memory_pages[page_mem_current_page_idx][PageSize]>>;
 
-        memory_pages[page_mem_current_page_idx][current_byte_idx] :=
-          user_buffer[page_mem_current_buf_offset];
-        current_byte_idx := current_byte_idx + 1;
-        page_mem_current_buf_offset := page_mem_current_buf_offset + 1;
+        page_mem_status := "write_last";
 
-        if current_byte_idx > PageSize then
-          \* Кластер считается валидным после записи последнего байта в последнюю страницу
-          set_half_cluster_state(TRUE);
-          validate_page_mem_op();
-          page_mem_status := "idle";
-        end if;
+      or \* write_crc
+        await page_mem_status = "write_last";
+
+        memory_pages[page_mem_current_page_idx][PageSize] :=
+          user_buffer[page_mem_current_buf_offset + PageSize - 1];
+
+        \* Кластер считается валидным после записи последнего байта в последнюю страницу
+        set_half_cluster_state(TRUE);
+        validate_page_mem_op();
+        page_mem_status := "idle";
       end either;
     end while;
 end process;
@@ -685,18 +674,18 @@ PageMemStatusInvariant == page_mem_status \in {
   "init",
   "idle",
   "start_read",
-  "read_head",
   "read_tail",
   "start_write",
-  "write"
+  "write_middle",
+  \* Для последнего значения отдельное состояние, потому что это может
+  \* быть crc. Нужно иметь возможность завалиться перед ее записью
+  "write_last"
 }
 
 
 PageMemIndexesInvariant ==
-  /\ user_buf_start_offset \in 1..(2 * data_per_half_cluster_bytes)
   /\ page_mem_current_page_idx \in 1..PagesCount
   /\ page_mem_current_buf_offset \in 1..(2 * data_per_half_cluster_bytes + 1)
-  /\ current_byte_idx \in 1..(PageSize + 1)
 
 ====
 
