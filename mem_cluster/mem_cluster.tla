@@ -185,7 +185,9 @@ begin
 
               status := "st_free";
             else
-              assert first_half_state /\ ~second_half_state;
+              assert
+                /\ first_half_state /\ (second_half_state \in {NULL, FALSE})
+
               \* Копируем 1 -> 2
               user_buf_offset := 0;
               page_idx := get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2);
@@ -196,7 +198,10 @@ begin
 
           else
             if crc_2_ok /\ ee_crc_2_ok then
-              assert ~first_half_state /\ second_half_state;
+              assert
+                /\ first_half_state /= NULL
+                /\ ~first_half_state /\ second_half_state
+
               \* Копируем 2 -> 1
               user_buf_offset := 0;
               page_idx := get_half_cluster_start_page(cluster_idx, pages_per_half_cluster, 2);
@@ -304,20 +309,28 @@ begin
         user_buf_start_offset := page_mem_current_buf_offset;
         current_byte_idx := 1;
 
-        page_mem_status := "read";
+        page_mem_status := "read_head";
 
-      or \* read
-        await page_mem_status = "read";
+      or \* read_head
+        await page_mem_status = "read_head";
 
-        user_buffer[page_mem_current_buf_offset] :=
-          memory_pages[page_mem_current_page_idx][current_byte_idx];
-        current_byte_idx := current_byte_idx + 1;
-        page_mem_current_buf_offset := page_mem_current_buf_offset + 1;
+        user_buffer[page_mem_current_buf_offset] := memory_pages[page_mem_current_page_idx][1];
 
-        if current_byte_idx > PageSize then
-          validate_page_mem_op();
-          page_mem_status := "idle";
-        end if;
+        page_mem_status := "read_tail";
+
+      or \* read_tail
+        await page_mem_status = "read_tail";
+
+        with first_user_buf_part_size = page_mem_current_buf_offset + PageSize do
+          user_buffer := SequencePart(user_buffer, 1, page_mem_current_buf_offset) \o
+            SequencePart(memory_pages[page_mem_current_page_idx], 2, PageSize - 1) \o
+            SequencePart(
+              user_buffer, first_user_buf_part_size, Len(user_buffer) - first_user_buf_part_size
+            );
+        end with;
+
+        validate_page_mem_op();
+        page_mem_status := "idle";
 
       \* ---------- Запись ----------
       or \* start_write
@@ -672,7 +685,8 @@ PageMemStatusInvariant == page_mem_status \in {
   "init",
   "idle",
   "start_read",
-  "read",
+  "read_head",
+  "read_tail",
   "start_write",
   "write"
 }
