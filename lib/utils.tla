@@ -25,4 +25,7 @@ Range(seq) == {seq[i]: i \in DOMAIN seq}
 
 Min(set) == CHOOSE x \in set: \A el \in set: x <= el
 
+\* Возвращает индекс элемента в последовательности. От 0 до Len(seq) - 1
+IndexOf(seq, elem) == CHOOSE i \in 0..(Len(seq) - 1): seq[i + 1] = elem
+
 ====
