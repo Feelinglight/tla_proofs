@@ -20,11 +20,12 @@ ASSUME DATA_SECTORS_COUNT \in Nat \ {0}
 variables
   \* read write
   memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)],
-  user_buffer = SeqOfNElements(INIT_MEM_VALUE, PageSize),
 
   client_init = TRUE,
 
-  page_mem = [status |-> "idle", page_idx |-> 1];
+  page_mem = [
+    status |-> "idle", page_idx |-> 1, buffer |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)
+  ];
 
 macro change_key(key, action_status) begin
   map_status := "find_current_key";
@@ -33,10 +34,41 @@ macro change_key(key, action_status) begin
 end macro;
 
 macro read_page(page_index, next_status) begin
-  page_mem := [status |-> "read", page_idx |-> current_sector * SECTOR_SIZE_PAGES + page_index];
+  page_mem_page_index := current_sector * SECTOR_SIZE_PAGES + page_index;
+  page_mem_op := "read";
   map_status := "wait_page_mem";
   next_map_status := next_status;
 end macro;
+
+macro wait_page_mem_tick() begin
+  if page_mem.status = "idle" then
+    either
+      await page_mem_op = "read";
+
+      page_mem := [
+        status |-> "start_read",
+        page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+        buffer |-> page_buffer
+      ];
+
+      page_mem_op := "end_op";
+    or
+      await page_mem_op = "write";
+
+      page_mem := [
+        status |-> "start_write",
+        page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+        buffer |-> page_buffer
+      ];
+
+      page_mem_op := "end_op";
+    or
+      await page_mem_op = "end_op";
+      map_status := next_map_status;
+    end either;
+  end if;
+end macro;
+
 
 fair process reset = "Reset"
 begin
@@ -54,26 +86,7 @@ fair process client = "Client"
 begin
   ResetTick:
     while TRUE do
-      either
-        await page_mem.status = "idle";
-
-        user_buffer := SeqOfNElements(INIT_MEM_VALUE, PageSize);
-
-        with idx \in 1..PagesCount do
-          page_mem := [status |-> "start_read", page_idx |-> idx];
-        end with;
-      or
-        await page_mem.status = "idle";
-
-        with data \in [ALLOWED_MEM_VALUES -> ALLOWED_MEM_VALUES] do
-          user_buffer := SeqOfNElements(data, PageSize);
-        end with;
-
-        with idx \in 1..PagesCount do
-          page_mem := [status |-> "start_write", page_idx |-> idx];
-        end with;
-
-      end either;
+      skip;
     end while;
 end process;
 
@@ -94,38 +107,37 @@ begin
       or \* start_read
         await page_mem.status = "start_read";
 
-        user_buffer[1] := memory_pages[page_mem.page_idx][1];
-
+        page_mem.buffer[1] := memory_pages[page_mem.page_idx][1] ||
         page_mem.status := "read_tail";
 
       or \* read_tail
         await page_mem.status = "read_tail";
 
-        user_buffer := SequencePart(user_buffer, 1, 1) \o
-          SequencePart(memory_pages[page_mem.page_idx], 2, PageSize - 1);
+        page_mem.buffer := SequencePart(page_mem.buffer, 1, 1) \o
+          SequencePart(memory_pages[page_mem.page_idx], 2, PageSize - 1) ||
+        page_mem.status := "idle";
 
         assert
-          /\ Len(user_buffer) = PageSize
-          /\ memory_pages[page_mem.page_idx] = user_buffer;
+          /\ Len(page_mem.buffer) = PageSize
+          /\ memory_pages[page_mem.page_idx] = page_mem.buffer;
 
-        page_mem.status := "idle";
 
       \* ---------- Запись ----------
       or \* start_write
         await page_mem.status = "start_write";
 
-        memory_pages[page_mem.page_idx][1] := user_buffer[1];
+        memory_pages[page_mem.page_idx][1] := page_mem.buffer[1];
 
         page_mem.status := "write_tail";
       or \* write_tail
         await page_mem.status = "write_tail";
 
-        memory_pages[page_mem.page_idx] := <<user_buffer[1]>> \o
-          SequencePart(user_buffer, 2, PageSize - 1);
+        memory_pages[page_mem.page_idx] := <<page_mem.buffer[1]>> \o
+          SequencePart(page_mem.buffer, 2, PageSize - 1);
 
         assert
-          /\ Len(user_buffer) = PageSize
-          /\ memory_pages[page_mem.page_idx] = user_buffer;
+          /\ Len(page_mem.buffer) = PageSize
+          /\ memory_pages[page_mem.page_idx] = page_mem.buffer;
 
         page_mem.status := "idle";
       end either;
@@ -137,11 +149,15 @@ variables
   keys = <<>>,
   keys_count = 0,
 
+  page_buffer = SeqOfNElements(INIT_MEM_VALUE, PageSize),
+
   map_status = "free",
   next_map_status = "free",
 
   action = "read_value",
+  add_new_key_status = "update_info",
 
+  page_mem_op = "read",
   current_key = 0,
   new_value = CHOOSE x \in ALLOWED_MEM_VALUES: TRUE,
 
@@ -149,6 +165,11 @@ variables
   current_sector = 0,
   current_sector_page = 0,
   current_value_cell = 0,
+
+  page_mem_page_index = 0;
+
+  first_read = TRUE,
+  actual_value = 0;
 
 begin
   MapTick:
@@ -158,9 +179,28 @@ begin
       await map_status = "free";
     or
       await map_status = "find_current_key";
-      assert Contains(keys, current_key);
 
-      current_key_index := IndexOf(keys, current_key);
+      with search_res = IndexAndResult(keys, current_key) do
+        current_key_index := search_res.index;
+        current_sector := current_key_index % DATA_SECTORS_COUNT;
+        current_value_cell := current_key_index \div DATA_SECTORS_COUNT;
+
+        if search_res.found = FALSE then
+          map_status := "add_new_key";
+          add_new_key_status := "update_info";
+        else
+          actual_value := 0;
+          current_sector_page := 0;
+          with next_status_local = "find_actual_value" do
+            read_page(0, next_status_local);
+          end with;
+        end if;
+      end with;
+
+    or
+      await map_status = "wait_page_mem";
+
+      wait_page_mem_tick();
 
     end either;
 end process;
@@ -202,38 +242,49 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "40ab7f6d" /\ chksum(tla) = "439fec4c")
-\* Label ResetTick of process reset at line 44 col 5 changed to ResetTick_
-\* Process page_mem at line 81 col 1 changed to page_mem_
-VARIABLES pc, memory_pages, user_buffer, client_init, page_mem, keys, 
-          keys_count, map_status, next_map_status, action, current_key, 
-          new_value, current_key_index, current_sector, current_sector_page, 
-          current_value_cell, map_command
+\* BEGIN TRANSLATION (chksum(pcal) = "1d3d7a7" /\ chksum(tla) = "95687fe2")
+\* Label ResetTick of process reset at line 76 col 5 changed to ResetTick_
+\* Process page_mem at line 94 col 1 changed to page_mem_
+VARIABLES pc, memory_pages, client_init, page_mem, keys, keys_count, 
+          page_buffer, map_status, next_map_status, action, 
+          add_new_key_status, page_mem_op, current_key, new_value, 
+          current_key_index, current_sector, current_sector_page, 
+          current_value_cell, page_mem_page_index, first_read, actual_value, 
+          map_command
 
-vars == << pc, memory_pages, user_buffer, client_init, page_mem, keys, 
-           keys_count, map_status, next_map_status, action, current_key, 
-           new_value, current_key_index, current_sector, current_sector_page, 
-           current_value_cell, map_command >>
+vars == << pc, memory_pages, client_init, page_mem, keys, keys_count, 
+           page_buffer, map_status, next_map_status, action, 
+           add_new_key_status, page_mem_op, current_key, new_value, 
+           current_key_index, current_sector, current_sector_page, 
+           current_value_cell, page_mem_page_index, first_read, actual_value, 
+           map_command >>
 
 ProcSet == {"Reset"} \cup {"Client"} \cup {"PageMem"} \cup {"Map"} \cup {"MapClient"}
 
 Init == (* Global variables *)
         /\ memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)]
-        /\ user_buffer = SeqOfNElements(INIT_MEM_VALUE, PageSize)
         /\ client_init = TRUE
-        /\ page_mem = [status |-> "idle", page_idx |-> 1]
+        /\ page_mem =            [
+                        status |-> "idle", page_idx |-> 1, buffer |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)
+                      ]
         (* Process map *)
         /\ keys = <<>>
         /\ keys_count = 0
+        /\ page_buffer = SeqOfNElements(INIT_MEM_VALUE, PageSize)
         /\ map_status = "free"
         /\ next_map_status = "free"
         /\ action = "read_value"
+        /\ add_new_key_status = "update_info"
+        /\ page_mem_op = "read"
         /\ current_key = 0
         /\ new_value = CHOOSE x \in ALLOWED_MEM_VALUES: TRUE
         /\ current_key_index = 0
         /\ current_sector = 0
         /\ current_sector_page = 0
         /\ current_value_cell = 0
+        /\ page_mem_page_index = 0
+        /\ first_read = TRUE
+        /\ actual_value = 0
         (* Process map_client *)
         /\ map_command = "no_command"
         /\ pc = [self \in ProcSet |-> CASE self = "Reset" -> "ResetTick_"
@@ -247,29 +298,26 @@ ResetTick_ == /\ pc["Reset"] = "ResetTick_"
                  \/ /\ TRUE
                     /\ UNCHANGED page_mem
               /\ pc' = [pc EXCEPT !["Reset"] = "ResetTick_"]
-              /\ UNCHANGED << memory_pages, user_buffer, client_init, keys, 
-                              keys_count, map_status, next_map_status, action, 
-                              current_key, new_value, current_key_index, 
-                              current_sector, current_sector_page, 
-                              current_value_cell, map_command >>
+              /\ UNCHANGED << memory_pages, client_init, keys, keys_count, 
+                              page_buffer, map_status, next_map_status, action, 
+                              add_new_key_status, page_mem_op, current_key, 
+                              new_value, current_key_index, current_sector, 
+                              current_sector_page, current_value_cell, 
+                              page_mem_page_index, first_read, actual_value, 
+                              map_command >>
 
 reset == ResetTick_
 
 ResetTick == /\ pc["Client"] = "ResetTick"
-             /\ \/ /\ page_mem.status = "idle"
-                   /\ user_buffer' = SeqOfNElements(INIT_MEM_VALUE, PageSize)
-                   /\ \E idx \in 1..PagesCount:
-                        page_mem' = [status |-> "start_read", page_idx |-> idx]
-                \/ /\ page_mem.status = "idle"
-                   /\ \E data \in [ALLOWED_MEM_VALUES -> ALLOWED_MEM_VALUES]:
-                        user_buffer' = SeqOfNElements(data, PageSize)
-                   /\ \E idx \in 1..PagesCount:
-                        page_mem' = [status |-> "start_write", page_idx |-> idx]
+             /\ TRUE
              /\ pc' = [pc EXCEPT !["Client"] = "ResetTick"]
-             /\ UNCHANGED << memory_pages, client_init, keys, keys_count, 
-                             map_status, next_map_status, action, current_key, 
-                             new_value, current_key_index, current_sector, 
+             /\ UNCHANGED << memory_pages, client_init, page_mem, keys, 
+                             keys_count, page_buffer, map_status, 
+                             next_map_status, action, add_new_key_status, 
+                             page_mem_op, current_key, new_value, 
+                             current_key_index, current_sector, 
                              current_sector_page, current_value_cell, 
+                             page_mem_page_index, first_read, actual_value, 
                              map_command >>
 
 client == ResetTick
@@ -277,96 +325,141 @@ client == ResetTick
 PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                /\ \/ /\ page_mem.status = "init"
                      /\ page_mem' = [page_mem EXCEPT !.status = "idle"]
-                     /\ UNCHANGED <<memory_pages, user_buffer>>
+                     /\ UNCHANGED memory_pages
                   \/ /\ page_mem.status = "idle"
-                     /\ UNCHANGED <<memory_pages, user_buffer, page_mem>>
+                     /\ UNCHANGED <<memory_pages, page_mem>>
                   \/ /\ page_mem.status = "start_read"
-                     /\ user_buffer' = [user_buffer EXCEPT ![1] = memory_pages[page_mem.page_idx][1]]
-                     /\ page_mem' = [page_mem EXCEPT !.status = "read_tail"]
+                     /\ page_mem' = [page_mem EXCEPT !.buffer[1] = memory_pages[page_mem.page_idx][1],
+                                                     !.status = "read_tail"]
                      /\ UNCHANGED memory_pages
                   \/ /\ page_mem.status = "read_tail"
-                     /\ user_buffer' =              SequencePart(user_buffer, 1, 1) \o
-                                       SequencePart(memory_pages[page_mem.page_idx], 2, PageSize - 1)
-                     /\ Assert(/\ Len(user_buffer') = PageSize
-                               /\ memory_pages[page_mem.page_idx] = user_buffer', 
-                               "Failure of assertion at line 107, column 9.")
-                     /\ page_mem' = [page_mem EXCEPT !.status = "idle"]
+                     /\ page_mem' = [page_mem EXCEPT !.buffer =                  SequencePart(page_mem.buffer, 1, 1) \o
+                                                                SequencePart(memory_pages[page_mem.page_idx], 2, PageSize - 1),
+                                                     !.status = "idle"]
+                     /\ Assert(/\ Len(page_mem'.buffer) = PageSize
+                               /\ memory_pages[page_mem'.page_idx] = page_mem'.buffer, 
+                               "Failure of assertion at line 120, column 9.")
                      /\ UNCHANGED memory_pages
                   \/ /\ page_mem.status = "start_write"
-                     /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx][1] = user_buffer[1]]
+                     /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx][1] = page_mem.buffer[1]]
                      /\ page_mem' = [page_mem EXCEPT !.status = "write_tail"]
-                     /\ UNCHANGED user_buffer
                   \/ /\ page_mem.status = "write_tail"
-                     /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx] =                                  <<user_buffer[1]>> \o
-                                                                                    SequencePart(user_buffer, 2, PageSize - 1)]
-                     /\ Assert(/\ Len(user_buffer) = PageSize
-                               /\ memory_pages'[page_mem.page_idx] = user_buffer, 
-                               "Failure of assertion at line 126, column 9.")
+                     /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx] =                                  <<page_mem.buffer[1]>> \o
+                                                                                    SequencePart(page_mem.buffer, 2, PageSize - 1)]
+                     /\ Assert(/\ Len(page_mem.buffer) = PageSize
+                               /\ memory_pages'[page_mem.page_idx] = page_mem.buffer, 
+                               "Failure of assertion at line 138, column 9.")
                      /\ page_mem' = [page_mem EXCEPT !.status = "idle"]
-                     /\ UNCHANGED user_buffer
                /\ pc' = [pc EXCEPT !["PageMem"] = "PageMemTick"]
-               /\ UNCHANGED << client_init, keys, keys_count, map_status, 
-                               next_map_status, action, current_key, new_value, 
-                               current_key_index, current_sector, 
+               /\ UNCHANGED << client_init, keys, keys_count, page_buffer, 
+                               map_status, next_map_status, action, 
+                               add_new_key_status, page_mem_op, current_key, 
+                               new_value, current_key_index, current_sector, 
                                current_sector_page, current_value_cell, 
+                               page_mem_page_index, first_read, actual_value, 
                                map_command >>
 
 page_mem_ == PageMemTick
 
 MapTick == /\ pc["Map"] = "MapTick"
            /\ \/ /\ map_status = "init"
-                 /\ UNCHANGED current_key_index
+                 /\ UNCHANGED <<page_mem, map_status, next_map_status, add_new_key_status, page_mem_op, current_key_index, current_sector, current_sector_page, current_value_cell, page_mem_page_index, actual_value>>
               \/ /\ map_status = "free"
-                 /\ UNCHANGED current_key_index
+                 /\ UNCHANGED <<page_mem, map_status, next_map_status, add_new_key_status, page_mem_op, current_key_index, current_sector, current_sector_page, current_value_cell, page_mem_page_index, actual_value>>
               \/ /\ map_status = "find_current_key"
-                 /\ Assert(Contains(keys, current_key), 
-                           "Failure of assertion at line 161, column 7.")
-                 /\ current_key_index' = IndexOf(keys, current_key)
+                 /\ LET search_res == IndexAndResult(keys, current_key) IN
+                      /\ current_key_index' = search_res.index
+                      /\ current_sector' = current_key_index' % DATA_SECTORS_COUNT
+                      /\ current_value_cell' = (current_key_index' \div DATA_SECTORS_COUNT)
+                      /\ IF search_res.found = FALSE
+                            THEN /\ map_status' = "add_new_key"
+                                 /\ add_new_key_status' = "update_info"
+                                 /\ UNCHANGED << next_map_status, page_mem_op, 
+                                                 current_sector_page, 
+                                                 page_mem_page_index, 
+                                                 actual_value >>
+                            ELSE /\ actual_value' = 0
+                                 /\ current_sector_page' = 0
+                                 /\ LET next_status_local == "find_actual_value" IN
+                                      /\ page_mem_page_index' = current_sector' * SECTOR_SIZE_PAGES + 0
+                                      /\ page_mem_op' = "read"
+                                      /\ map_status' = "wait_page_mem"
+                                      /\ next_map_status' = next_status_local
+                                 /\ UNCHANGED add_new_key_status
+                 /\ UNCHANGED page_mem
+              \/ /\ map_status = "wait_page_mem"
+                 /\ IF page_mem.status = "idle"
+                       THEN /\ \/ /\ page_mem_op = "read"
+                                  /\ page_mem' =             [
+                                                   status |-> "start_read",
+                                                   page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+                                                   buffer |-> page_buffer
+                                                 ]
+                                  /\ page_mem_op' = "end_op"
+                                  /\ UNCHANGED map_status
+                               \/ /\ page_mem_op = "write"
+                                  /\ page_mem' =             [
+                                                   status |-> "start_write",
+                                                   page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+                                                   buffer |-> page_buffer
+                                                 ]
+                                  /\ page_mem_op' = "end_op"
+                                  /\ UNCHANGED map_status
+                               \/ /\ page_mem_op = "end_op"
+                                  /\ map_status' = next_map_status
+                                  /\ UNCHANGED <<page_mem, page_mem_op>>
+                       ELSE /\ TRUE
+                            /\ UNCHANGED << page_mem, map_status, page_mem_op >>
+                 /\ UNCHANGED <<next_map_status, add_new_key_status, current_key_index, current_sector, current_sector_page, current_value_cell, page_mem_page_index, actual_value>>
            /\ pc' = [pc EXCEPT !["Map"] = "Done"]
-           /\ UNCHANGED << memory_pages, user_buffer, client_init, page_mem, 
-                           keys, keys_count, map_status, next_map_status, 
-                           action, current_key, new_value, current_sector, 
-                           current_sector_page, current_value_cell, 
-                           map_command >>
+           /\ UNCHANGED << memory_pages, client_init, keys, keys_count, 
+                           page_buffer, action, current_key, new_value, 
+                           first_read, map_command >>
 
 map == MapTick
 
 MapClientTick == /\ pc["MapClient"] = "MapClientTick"
                  /\ \/ /\ map_status = "free"
-                       /\ UNCHANGED <<page_mem, map_status, next_map_status, action, current_key, new_value, current_sector_page>>
+                       /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                     \/ /\ map_status = "free"
                        /\ \E key \in ALLOWED_MEM_VALUES:
                             \E increment \in ALLOWED_MEM_VALUES:
                               IF ~Contains(keys, increment) /\ keys_count = MAX_KEYS_COUNT
                                  THEN /\ TRUE
-                                      /\ UNCHANGED << page_mem, map_status, 
+                                      /\ UNCHANGED << map_status, 
                                                       next_map_status, action, 
-                                                      current_key, new_value, 
-                                                      current_sector_page >>
+                                                      page_mem_op, current_key, 
+                                                      new_value, 
+                                                      current_sector_page, 
+                                                      page_mem_page_index >>
                                  ELSE /\ new_value' = increment
                                       /\ IF current_key /= key \/ keys_count = 0
                                             THEN /\ map_status' = "find_current_key"
                                                  /\ current_key' = key
                                                  /\ action' = "write_value"
-                                                 /\ UNCHANGED << page_mem, 
-                                                                 next_map_status, 
-                                                                 current_sector_page >>
+                                                 /\ UNCHANGED << next_map_status, 
+                                                                 page_mem_op, 
+                                                                 current_sector_page, 
+                                                                 page_mem_page_index >>
                                             ELSE /\ current_sector_page' = (current_sector_page + 1) % SECTOR_SIZE_PAGES
-                                                 /\ page_mem' = [status |-> "read", page_idx |-> current_sector * SECTOR_SIZE_PAGES + current_sector_page']
+                                                 /\ page_mem_page_index' = current_sector * SECTOR_SIZE_PAGES + current_sector_page'
+                                                 /\ page_mem_op' = "read"
                                                  /\ map_status' = "wait_page_mem"
                                                  /\ next_map_status' = "write_new_value"
                                                  /\ UNCHANGED << action, 
                                                                  current_key >>
                     \/ /\ map_status = "free"
-                       /\ UNCHANGED <<page_mem, map_status, next_map_status, action, current_key, new_value, current_sector_page>>
+                       /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                     \/ /\ map_status = "free"
-                       /\ UNCHANGED <<page_mem, map_status, next_map_status, action, current_key, new_value, current_sector_page>>
+                       /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                     \/ /\ map_status = "free"
-                       /\ UNCHANGED <<page_mem, map_status, next_map_status, action, current_key, new_value, current_sector_page>>
+                       /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                  /\ pc' = [pc EXCEPT !["MapClient"] = "Done"]
-                 /\ UNCHANGED << memory_pages, user_buffer, client_init, keys, 
-                                 keys_count, current_key_index, current_sector, 
-                                 current_value_cell, map_command >>
+                 /\ UNCHANGED << memory_pages, client_init, page_mem, keys, 
+                                 keys_count, page_buffer, add_new_key_status, 
+                                 current_key_index, current_sector, 
+                                 current_value_cell, first_read, actual_value, 
+                                 map_command >>
 
 map_client == MapClientTick
 
@@ -405,14 +498,24 @@ ActionInvariant == action \in {
   "replace_key"
 }
 
+AddNewKeyStatusInvariant == add_new_key_status \in {
+  "read_value",
+  "write_value",
+  "replace_key"
+}
+
+PageOpInvariant == page_mem_op \in {
+  "read",
+  "write",
+  "end_op"
+}
 
 MapCommandInvariant == map_command \in {
-  "no_command",
-  "clear",
-  "increment_value",
-  "get_value",
-  "replace_key",
-  "update_value"
+  "update_info",
+  "clear_data_sector",
+  "write_key",
+  "write_keys_count",
+  "wait_write_keys_count"
 }
 
 PageMemIndexesInvariant ==

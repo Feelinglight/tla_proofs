@@ -1,5 +1,5 @@
 ---- MODULE utils ----
-EXTENDS TLC, Integers, Sequences
+EXTENDS TLC, Integers, Sequences, SequencesExt
 
 
 \* Последовательности длины n, состоящая из одинаковых элементов element
@@ -26,6 +26,23 @@ Range(seq) == {seq[i]: i \in DOMAIN seq}
 Min(set) == CHOOSE x \in set: \A el \in set: x <= el
 
 \* Возвращает индекс элемента в последовательности. От 0 до Len(seq) - 1
-IndexOf(seq, elem) == CHOOSE i \in 0..(Len(seq) - 1): seq[i + 1] = elem
+\* Если элемент не найден, то возвращает default
+IndexOrDefault(seq, elem, default) ==
+  IF Contains(seq, elem) THEN
+    CHOOSE i \in 0..(Len(seq) - 1): seq[i + 1] = elem
+  ELSE
+    default
+
+\* Возвращает индекс элемента в последовательности. От 0 до Len(seq) - 1
+\* Возращаемое значение - функция вида [result, index].
+\* Если элемент есть в последовательности, то результат - TRUE, иначе FALSE
+IndexAndResult(seq, elem) ==
+  LET
+    result == Contains(seq, elem)
+  IN
+    IF Contains(seq, elem) THEN
+      [found |-> result, index |-> CHOOSE i \in 0..(Len(seq) - 1): seq[i + 1] = elem]
+    ELSE
+      [found |-> result, index |-> 0]
 
 ====
