@@ -2,7 +2,7 @@
 EXTENDS TLC, Integers, utils, SequencesExt, FiniteSets, Sequences
 
 CONSTANTS PagesCount, PageSize, NULL, INIT_MEM_VALUE, ALLOWED_MEM_VALUES,
-  MAX_KEYS_COUNT, SECTOR_SIZE_PAGES, CLUSTER_SIZE_PAGES, DATA_SECTORS_COUNT
+  MAX_KEYS_COUNT, SECTOR_SIZE_PAGES, DATA_SECTORS_COUNT
 
 ASSUME PagesCount \in Nat \ {0}
 ASSUME PageSize \in Nat \ {0}
@@ -13,7 +13,6 @@ ASSUME ALLOWED_MEM_VALUES \subseteq (Nat \ {0, 1})
 
 ASSUME MAX_KEYS_COUNT \in Nat \ {0}
 ASSUME SECTOR_SIZE_PAGES \in Nat \ {0}
-ASSUME CLUSTER_SIZE_PAGES \in Nat \ {0}
 ASSUME DATA_SECTORS_COUNT \in Nat \ {0}
 
 (*--algorithm mem_cluster
@@ -109,7 +108,7 @@ macro wait_page_mem_tick() begin
 
       page_mem := [
         status |-> "start_read",
-        page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+        page_idx |-> page_mem_page_index,
         buffer |-> page_buffer
       ];
 
@@ -119,7 +118,7 @@ macro wait_page_mem_tick() begin
 
       page_mem := [
         status |-> "start_write",
-        page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+        page_idx |-> page_mem_page_index,
         buffer |-> page_buffer
       ];
 
@@ -370,6 +369,7 @@ begin
   MapClientTick:
     either \* clear
       await map_status = "free";
+      print(DATA_SECTORS_COUNT);
     or \* increment_value
       await map_status = "free";
 
@@ -399,9 +399,9 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "56e99ba3" /\ chksum(tla) = "81aff2b4")
-\* Label ResetTick of process reset at line 137 col 5 changed to ResetTick_
-\* Process page_mem at line 155 col 1 changed to page_mem_
+\* BEGIN TRANSLATION (chksum(pcal) = "a764eab8" /\ chksum(tla) = "7ddd14c8")
+\* Label ResetTick of process reset at line 136 col 5 changed to ResetTick_
+\* Process page_mem at line 154 col 1 changed to page_mem_
 VARIABLES pc, memory_pages, client_init, page_mem, cluster_status, 
           cluster_write_key, cluster_write_key_index, cluster_keys, 
           cluster_write_count, cluster_keys_count, keys, keys_count, 
@@ -516,7 +516,7 @@ PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                                                      !.status = "idle"]
                      /\ Assert(/\ Len(page_mem'.buffer) = PageSize
                                /\ memory_pages[page_mem'.page_idx] = page_mem'.buffer, 
-                               "Failure of assertion at line 181, column 9.")
+                               "Failure of assertion at line 180, column 9.")
                      /\ UNCHANGED memory_pages
                   \/ /\ page_mem.status = "start_write"
                      /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx][1] = page_mem.buffer[1]]
@@ -526,7 +526,7 @@ PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                                                                                     SequencePart(page_mem.buffer, 2, PageSize - 1)]
                      /\ Assert(/\ Len(page_mem.buffer) = PageSize
                                /\ memory_pages'[page_mem.page_idx] = page_mem.buffer, 
-                               "Failure of assertion at line 198, column 9.")
+                               "Failure of assertion at line 197, column 9.")
                      /\ page_mem' = [page_mem EXCEPT !.status = "idle"]
                /\ pc' = [pc EXCEPT !["PageMem"] = "PageMemTick"]
                /\ UNCHANGED << client_init, cluster_status, cluster_write_key, 
@@ -550,7 +550,7 @@ ClusterTick == /\ pc["Cluster"] = "ClusterTick"
                      /\ UNCHANGED <<cluster_status, cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "start_write_key"
                      /\ Assert(cluster_write_key_index < MAX_KEYS_COUNT, 
-                               "Failure of assertion at line 228, column 9.")
+                               "Failure of assertion at line 227, column 9.")
                      /\ cluster_status' = "write_tail_key"
                      /\ UNCHANGED <<cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "write_tail_key"
@@ -559,7 +559,7 @@ ClusterTick == /\ pc["Cluster"] = "ClusterTick"
                      /\ UNCHANGED cluster_keys_count
                   \/ /\ cluster_status = "start_write_count"
                      /\ Assert(cluster_write_count = cluster_keys_count + 1, 
-                               "Failure of assertion at line 237, column 9.")
+                               "Failure of assertion at line 236, column 9.")
                      /\ cluster_status' = "write_tail_count"
                      /\ UNCHANGED <<cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "write_tail_count"
@@ -673,16 +673,16 @@ MapTick == /\ pc["Map"] = "MapTick"
                  /\ UNCHANGED <<page_mem, cluster_status, cluster_write_key, cluster_write_key_index, cluster_write_count, keys, keys_count, page_buffer, map_status, next_map_status, add_new_key_status, replace_key_status, page_mem_op, value_buffer, current_key_index, current_sector, current_sector_page, current_value_cell, page_mem_page_index, actual_value>>
               \/ /\ map_status = "find_actual_value"
                  /\ Assert(current_sector_page < SECTOR_SIZE_PAGES, 
-                           "Failure of assertion at line 321, column 7.")
+                           "Failure of assertion at line 320, column 7.")
                  /\ LET current_value_less == page_buffer[current_value_cell] < actual_value IN
                       LET current_value_last == current_sector_page = SECTOR_SIZE_PAGES - 1 IN
                         LET current_value == page_buffer[current_value_cell] IN
                           IF current_value_less \/ current_value_last
                              THEN /\ Assert(action /= "replace_key", 
-                                            "Failure of assertion at line 329, column 11.")
+                                            "Failure of assertion at line 328, column 11.")
                                   /\ IF current_value_less
                                         THEN /\ Assert(current_sector_page /= 0, 
-                                                       "Failure of assertion at line 332, column 13.")
+                                                       "Failure of assertion at line 331, column 13.")
                                              /\ UNCHANGED actual_value
                                         ELSE /\ IF current_value_last
                                                    THEN /\ actual_value' = current_value
@@ -725,7 +725,7 @@ MapTick == /\ pc["Map"] = "MapTick"
                        THEN /\ \/ /\ page_mem_op = "read"
                                   /\ page_mem' =             [
                                                    status |-> "start_read",
-                                                   page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+                                                   page_idx |-> page_mem_page_index,
                                                    buffer |-> page_buffer
                                                  ]
                                   /\ page_mem_op' = "end_op"
@@ -733,7 +733,7 @@ MapTick == /\ pc["Map"] = "MapTick"
                                \/ /\ page_mem_op = "write"
                                   /\ page_mem' =             [
                                                    status |-> "start_write",
-                                                   page_idx |-> CLUSTER_SIZE_PAGES + page_mem_page_index,
+                                                   page_idx |-> page_mem_page_index,
                                                    buffer |-> page_buffer
                                                  ]
                                   /\ page_mem_op' = "end_op"
@@ -753,6 +753,7 @@ map == MapTick
 
 MapClientTick == /\ pc["MapClient"] = "MapClientTick"
                  /\ \/ /\ map_status = "free"
+                       /\ PrintT((DATA_SECTORS_COUNT))
                        /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                     \/ /\ map_status = "free"
                        /\ \E key \in ALLOWED_MEM_VALUES:
