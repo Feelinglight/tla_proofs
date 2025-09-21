@@ -61,7 +61,7 @@ macro add_new_key_tick() begin
     await add_new_key_status = "update_info";
 
     keys := Append(keys, current_key);
-    keys_count := 1;
+    keys_count := keys_count + 1;
 
     if keys_count <= DATA_SECTORS_COUNT then
       page_buffer := SeqOfNElements(INIT_MEM_VALUE, PageSize);
@@ -136,22 +136,16 @@ begin
     while TRUE do
       either
         page_mem.status := "init";
+        cluster_status := "init";
+        map_command := "no_command";
+        map_status := "free";
       or
         skip;
       end either;
     end while;
 end process;
 
-fair process client = "Client"
-begin
-  ResetTick:
-    while TRUE do
-      skip;
-    end while;
-end process;
-
-
-process page_mem = "PageMem"
+fair process page_mem = "PageMem"
 begin
   PageMemTick:
     while TRUE do
@@ -203,19 +197,26 @@ begin
     end while;
 end process;
 
-process cluster = "Cluster"
+fair process cluster = "Cluster"
 variables
+  \* not persistent
   cluster_status = "init",
-  cluster_write_key = 0,
+  cluster_write_key = INIT_MEM_VALUE,
   cluster_write_key_index = 0,
+  cluster_write_count = 0,
+
+  \* persistent
   cluster_keys = SeqOfNElements(INIT_MEM_VALUE, MAX_KEYS_COUNT),
-  cluster_write_count = INIT_MEM_VALUE,
   cluster_keys_count = 0;
 begin
   ClusterTick:
     while TRUE do
       either \* init
         await cluster_status = "init";
+
+        cluster_write_key := INIT_MEM_VALUE;
+        cluster_write_key_index := 0;
+        cluster_write_count := 0;
 
         cluster_status := "ready";
 
@@ -243,7 +244,7 @@ begin
     end while;
 end process;
 
-process map = "Map"
+fair process map = "Map"
 variables
   keys = <<>>,
   keys_count = 0,
@@ -362,14 +363,13 @@ begin
 end process;
 
 
-process map_client = "MapClient"
+fair process map_client = "MapClient"
 variables
   map_command = "no_command";
 begin
   MapClientTick:
     either \* clear
       await map_status = "free";
-      print(DATA_SECTORS_COUNT);
     or \* increment_value
       await map_status = "free";
 
@@ -399,28 +399,27 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "a764eab8" /\ chksum(tla) = "7ddd14c8")
-\* Label ResetTick of process reset at line 136 col 5 changed to ResetTick_
-\* Process page_mem at line 154 col 1 changed to page_mem_
+\* BEGIN TRANSLATION (chksum(pcal) = "e4eb3999" /\ chksum(tla) = "9db14a01")
+\* Process page_mem at line 148 col 6 changed to page_mem_
 VARIABLES pc, memory_pages, client_init, page_mem, cluster_status, 
-          cluster_write_key, cluster_write_key_index, cluster_keys, 
-          cluster_write_count, cluster_keys_count, keys, keys_count, 
-          page_buffer, map_status, next_map_status, action, 
-          add_new_key_status, replace_key_status, page_mem_op, current_key, 
-          new_value, value_buffer, current_key_index, current_sector, 
+          cluster_write_key, cluster_write_key_index, cluster_write_count, 
+          cluster_keys, cluster_keys_count, keys, keys_count, page_buffer, 
+          map_status, next_map_status, action, add_new_key_status, 
+          replace_key_status, page_mem_op, current_key, new_value, 
+          value_buffer, current_key_index, current_sector, 
           current_sector_page, current_value_cell, page_mem_page_index, 
           first_read, actual_value, map_command
 
 vars == << pc, memory_pages, client_init, page_mem, cluster_status, 
-           cluster_write_key, cluster_write_key_index, cluster_keys, 
-           cluster_write_count, cluster_keys_count, keys, keys_count, 
-           page_buffer, map_status, next_map_status, action, 
-           add_new_key_status, replace_key_status, page_mem_op, current_key, 
-           new_value, value_buffer, current_key_index, current_sector, 
+           cluster_write_key, cluster_write_key_index, cluster_write_count, 
+           cluster_keys, cluster_keys_count, keys, keys_count, page_buffer, 
+           map_status, next_map_status, action, add_new_key_status, 
+           replace_key_status, page_mem_op, current_key, new_value, 
+           value_buffer, current_key_index, current_sector, 
            current_sector_page, current_value_cell, page_mem_page_index, 
            first_read, actual_value, map_command >>
 
-ProcSet == {"Reset"} \cup {"Client"} \cup {"PageMem"} \cup {"Cluster"} \cup {"Map"} \cup {"MapClient"}
+ProcSet == {"Reset"} \cup {"PageMem"} \cup {"Cluster"} \cup {"Map"} \cup {"MapClient"}
 
 Init == (* Global variables *)
         /\ memory_pages = [page \in 1..PagesCount |-> SeqOfNElements(INIT_MEM_VALUE, PageSize)]
@@ -430,10 +429,10 @@ Init == (* Global variables *)
                       ]
         (* Process cluster *)
         /\ cluster_status = "init"
-        /\ cluster_write_key = 0
+        /\ cluster_write_key = INIT_MEM_VALUE
         /\ cluster_write_key_index = 0
+        /\ cluster_write_count = 0
         /\ cluster_keys = SeqOfNElements(INIT_MEM_VALUE, MAX_KEYS_COUNT)
-        /\ cluster_write_count = INIT_MEM_VALUE
         /\ cluster_keys_count = 0
         (* Process map *)
         /\ keys = <<>>
@@ -457,48 +456,31 @@ Init == (* Global variables *)
         /\ actual_value = 0
         (* Process map_client *)
         /\ map_command = "no_command"
-        /\ pc = [self \in ProcSet |-> CASE self = "Reset" -> "ResetTick_"
-                                        [] self = "Client" -> "ResetTick"
+        /\ pc = [self \in ProcSet |-> CASE self = "Reset" -> "ResetTick"
                                         [] self = "PageMem" -> "PageMemTick"
                                         [] self = "Cluster" -> "ClusterTick"
                                         [] self = "Map" -> "MapTick"
                                         [] self = "MapClient" -> "MapClientTick"]
 
-ResetTick_ == /\ pc["Reset"] = "ResetTick_"
-              /\ \/ /\ page_mem' = [page_mem EXCEPT !.status = "init"]
-                 \/ /\ TRUE
-                    /\ UNCHANGED page_mem
-              /\ pc' = [pc EXCEPT !["Reset"] = "ResetTick_"]
-              /\ UNCHANGED << memory_pages, client_init, cluster_status, 
-                              cluster_write_key, cluster_write_key_index, 
-                              cluster_keys, cluster_write_count, 
-                              cluster_keys_count, keys, keys_count, 
-                              page_buffer, map_status, next_map_status, action, 
-                              add_new_key_status, replace_key_status, 
-                              page_mem_op, current_key, new_value, 
-                              value_buffer, current_key_index, current_sector, 
-                              current_sector_page, current_value_cell, 
-                              page_mem_page_index, first_read, actual_value, 
-                              map_command >>
+ResetTick == /\ pc["Reset"] = "ResetTick"
+             /\ \/ /\ page_mem' = [page_mem EXCEPT !.status = "init"]
+                   /\ cluster_status' = "init"
+                   /\ map_command' = "no_command"
+                   /\ map_status' = "free"
+                \/ /\ TRUE
+                   /\ UNCHANGED <<page_mem, cluster_status, map_status, map_command>>
+             /\ pc' = [pc EXCEPT !["Reset"] = "ResetTick"]
+             /\ UNCHANGED << memory_pages, client_init, cluster_write_key, 
+                             cluster_write_key_index, cluster_write_count, 
+                             cluster_keys, cluster_keys_count, keys, 
+                             keys_count, page_buffer, next_map_status, action, 
+                             add_new_key_status, replace_key_status, 
+                             page_mem_op, current_key, new_value, value_buffer, 
+                             current_key_index, current_sector, 
+                             current_sector_page, current_value_cell, 
+                             page_mem_page_index, first_read, actual_value >>
 
-reset == ResetTick_
-
-ResetTick == /\ pc["Client"] = "ResetTick"
-             /\ TRUE
-             /\ pc' = [pc EXCEPT !["Client"] = "ResetTick"]
-             /\ UNCHANGED << memory_pages, client_init, page_mem, 
-                             cluster_status, cluster_write_key, 
-                             cluster_write_key_index, cluster_keys, 
-                             cluster_write_count, cluster_keys_count, keys, 
-                             keys_count, page_buffer, map_status, 
-                             next_map_status, action, add_new_key_status, 
-                             replace_key_status, page_mem_op, current_key, 
-                             new_value, value_buffer, current_key_index, 
-                             current_sector, current_sector_page, 
-                             current_value_cell, page_mem_page_index, 
-                             first_read, actual_value, map_command >>
-
-client == ResetTick
+reset == ResetTick
 
 PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                /\ \/ /\ page_mem.status = "init"
@@ -516,7 +498,7 @@ PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                                                      !.status = "idle"]
                      /\ Assert(/\ Len(page_mem'.buffer) = PageSize
                                /\ memory_pages[page_mem'.page_idx] = page_mem'.buffer, 
-                               "Failure of assertion at line 180, column 9.")
+                               "Failure of assertion at line 174, column 9.")
                      /\ UNCHANGED memory_pages
                   \/ /\ page_mem.status = "start_write"
                      /\ memory_pages' = [memory_pages EXCEPT ![page_mem.page_idx][1] = page_mem.buffer[1]]
@@ -526,12 +508,12 @@ PageMemTick == /\ pc["PageMem"] = "PageMemTick"
                                                                                     SequencePart(page_mem.buffer, 2, PageSize - 1)]
                      /\ Assert(/\ Len(page_mem.buffer) = PageSize
                                /\ memory_pages'[page_mem.page_idx] = page_mem.buffer, 
-                               "Failure of assertion at line 197, column 9.")
+                               "Failure of assertion at line 191, column 9.")
                      /\ page_mem' = [page_mem EXCEPT !.status = "idle"]
                /\ pc' = [pc EXCEPT !["PageMem"] = "PageMemTick"]
                /\ UNCHANGED << client_init, cluster_status, cluster_write_key, 
-                               cluster_write_key_index, cluster_keys, 
-                               cluster_write_count, cluster_keys_count, keys, 
+                               cluster_write_key_index, cluster_write_count, 
+                               cluster_keys, cluster_keys_count, keys, 
                                keys_count, page_buffer, map_status, 
                                next_map_status, action, add_new_key_status, 
                                replace_key_status, page_mem_op, current_key, 
@@ -544,39 +526,40 @@ page_mem_ == PageMemTick
 
 ClusterTick == /\ pc["Cluster"] = "ClusterTick"
                /\ \/ /\ cluster_status = "init"
+                     /\ cluster_write_key' = INIT_MEM_VALUE
+                     /\ cluster_write_key_index' = 0
+                     /\ cluster_write_count' = 0
                      /\ cluster_status' = "ready"
                      /\ UNCHANGED <<cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "ready"
-                     /\ UNCHANGED <<cluster_status, cluster_keys, cluster_keys_count>>
+                     /\ UNCHANGED <<cluster_status, cluster_write_key, cluster_write_key_index, cluster_write_count, cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "start_write_key"
                      /\ Assert(cluster_write_key_index < MAX_KEYS_COUNT, 
-                               "Failure of assertion at line 227, column 9.")
+                               "Failure of assertion at line 228, column 9.")
                      /\ cluster_status' = "write_tail_key"
-                     /\ UNCHANGED <<cluster_keys, cluster_keys_count>>
+                     /\ UNCHANGED <<cluster_write_key, cluster_write_key_index, cluster_write_count, cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "write_tail_key"
                      /\ cluster_keys' = ReplaceAt(cluster_keys, cluster_write_key_index + 1, cluster_write_key)
                      /\ cluster_status' = "ready"
-                     /\ UNCHANGED cluster_keys_count
+                     /\ UNCHANGED <<cluster_write_key, cluster_write_key_index, cluster_write_count, cluster_keys_count>>
                   \/ /\ cluster_status = "start_write_count"
                      /\ Assert(cluster_write_count = cluster_keys_count + 1, 
-                               "Failure of assertion at line 236, column 9.")
+                               "Failure of assertion at line 237, column 9.")
                      /\ cluster_status' = "write_tail_count"
-                     /\ UNCHANGED <<cluster_keys, cluster_keys_count>>
+                     /\ UNCHANGED <<cluster_write_key, cluster_write_key_index, cluster_write_count, cluster_keys, cluster_keys_count>>
                   \/ /\ cluster_status = "write_tail_count"
                      /\ cluster_keys_count' = cluster_write_count
                      /\ cluster_status' = "ready"
-                     /\ UNCHANGED cluster_keys
+                     /\ UNCHANGED <<cluster_write_key, cluster_write_key_index, cluster_write_count, cluster_keys>>
                /\ pc' = [pc EXCEPT !["Cluster"] = "ClusterTick"]
-               /\ UNCHANGED << memory_pages, client_init, page_mem, 
-                               cluster_write_key, cluster_write_key_index, 
-                               cluster_write_count, keys, keys_count, 
-                               page_buffer, map_status, next_map_status, 
-                               action, add_new_key_status, replace_key_status, 
-                               page_mem_op, current_key, new_value, 
-                               value_buffer, current_key_index, current_sector, 
-                               current_sector_page, current_value_cell, 
-                               page_mem_page_index, first_read, actual_value, 
-                               map_command >>
+               /\ UNCHANGED << memory_pages, client_init, page_mem, keys, 
+                               keys_count, page_buffer, map_status, 
+                               next_map_status, action, add_new_key_status, 
+                               replace_key_status, page_mem_op, current_key, 
+                               new_value, value_buffer, current_key_index, 
+                               current_sector, current_sector_page, 
+                               current_value_cell, page_mem_page_index, 
+                               first_read, actual_value, map_command >>
 
 cluster == ClusterTick
 
@@ -618,7 +601,7 @@ MapTick == /\ pc["Map"] = "MapTick"
               \/ /\ map_status = "add_new_key"
                  /\ \/ /\ add_new_key_status = "update_info"
                        /\ keys' = Append(keys, current_key)
-                       /\ keys_count' = 1
+                       /\ keys_count' = keys_count + 1
                        /\ IF keys_count' <= DATA_SECTORS_COUNT
                              THEN /\ page_buffer' = SeqOfNElements(INIT_MEM_VALUE, PageSize)
                                   /\ current_sector_page' = 0
@@ -673,16 +656,16 @@ MapTick == /\ pc["Map"] = "MapTick"
                  /\ UNCHANGED <<page_mem, cluster_status, cluster_write_key, cluster_write_key_index, cluster_write_count, keys, keys_count, page_buffer, map_status, next_map_status, add_new_key_status, replace_key_status, page_mem_op, value_buffer, current_key_index, current_sector, current_sector_page, current_value_cell, page_mem_page_index, actual_value>>
               \/ /\ map_status = "find_actual_value"
                  /\ Assert(current_sector_page < SECTOR_SIZE_PAGES, 
-                           "Failure of assertion at line 320, column 7.")
+                           "Failure of assertion at line 321, column 7.")
                  /\ LET current_value_less == page_buffer[current_value_cell] < actual_value IN
                       LET current_value_last == current_sector_page = SECTOR_SIZE_PAGES - 1 IN
                         LET current_value == page_buffer[current_value_cell] IN
                           IF current_value_less \/ current_value_last
                              THEN /\ Assert(action /= "replace_key", 
-                                            "Failure of assertion at line 328, column 11.")
+                                            "Failure of assertion at line 329, column 11.")
                                   /\ IF current_value_less
                                         THEN /\ Assert(current_sector_page /= 0, 
-                                                       "Failure of assertion at line 331, column 13.")
+                                                       "Failure of assertion at line 332, column 13.")
                                              /\ UNCHANGED actual_value
                                         ELSE /\ IF current_value_last
                                                    THEN /\ actual_value' = current_value
@@ -753,7 +736,6 @@ map == MapTick
 
 MapClientTick == /\ pc["MapClient"] = "MapClientTick"
                  /\ \/ /\ map_status = "free"
-                       /\ PrintT((DATA_SECTORS_COUNT))
                        /\ UNCHANGED <<map_status, next_map_status, action, page_mem_op, current_key, new_value, current_sector_page, page_mem_page_index>>
                     \/ /\ map_status = "free"
                        /\ \E key \in ALLOWED_MEM_VALUES:
@@ -791,8 +773,8 @@ MapClientTick == /\ pc["MapClient"] = "MapClientTick"
                  /\ pc' = [pc EXCEPT !["MapClient"] = "Done"]
                  /\ UNCHANGED << memory_pages, client_init, page_mem, 
                                  cluster_status, cluster_write_key, 
-                                 cluster_write_key_index, cluster_keys, 
-                                 cluster_write_count, cluster_keys_count, keys, 
+                                 cluster_write_key_index, cluster_write_count, 
+                                 cluster_keys, cluster_keys_count, keys, 
                                  keys_count, page_buffer, add_new_key_status, 
                                  replace_key_status, value_buffer, 
                                  current_key_index, current_sector, 
@@ -801,11 +783,14 @@ MapClientTick == /\ pc["MapClient"] = "MapClientTick"
 
 map_client == MapClientTick
 
-Next == reset \/ client \/ page_mem_ \/ cluster \/ map \/ map_client
+Next == reset \/ page_mem_ \/ cluster \/ map \/ map_client
 
 Spec == /\ Init /\ [][Next]_vars
         /\ WF_vars(reset)
-        /\ WF_vars(client)
+        /\ WF_vars(page_mem_)
+        /\ WF_vars(cluster)
+        /\ WF_vars(map)
+        /\ WF_vars(map_client)
 
 \* END TRANSLATION
 
@@ -833,12 +818,6 @@ ReplaceKeyStatusInvariant == replace_key_status \in {
   "wait_replace_key"
 }
 
-PageOpInvariant == page_mem_op \in {
-  "read",
-  "write",
-  "end_op"
-}
-
 AddNewKeyStatusInvariant == add_new_key_status \in {
   "update_info",
   "clear_data_sector",
@@ -846,6 +825,21 @@ AddNewKeyStatusInvariant == add_new_key_status \in {
   "write_keys_count",
   "wait_write_keys_count"
 }
+
+PageOpInvariant == page_mem_op \in {
+  "read",
+  "write",
+  "end_op"
+}
+
+MapIndexesInvariant ==
+  /\ Len(keys) \in 1..MAX_KEYS_COUNT
+  /\ keys_count \in 1..MAX_KEYS_COUNT
+  /\ current_key_index = 0..(MAX_KEYS_COUNT - 1)
+  /\ current_sector = 0..(DATA_SECTORS_COUNT - 1)
+  /\ current_sector_page = 0..(SECTOR_SIZE_PAGES - 1)
+  /\ current_value_cell = 0..PageSize
+  /\ page_mem_page_index \in 0..(PagesCount - 1)
 
 ClusterStatusInvariant == cluster_status \in {
   "init",
@@ -855,6 +849,10 @@ ClusterStatusInvariant == cluster_status \in {
   "start_write_count",
   "write_tail_count"
 }
+
+ClusterIndexesInvariant ==
+  /\ cluster_write_key_index \in 0..(MAX_KEYS_COUNT - 1)
+  /\ cluster_keys_count \in 1..MAX_KEYS_COUNT
 
 PageMemStatusInvariant == page_mem.status \in {
   "init",

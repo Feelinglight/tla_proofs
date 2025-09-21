@@ -1,7 +1,8 @@
 ---- MODULE MC ----
 EXTENDS eeprom_safe_map, TLC
 
-PageSize_ == 2
+PagesCount_ == 3
+PageSize_ == 3
 MAX_KEYS_COUNT_ == 3
 
 DATA_SECTORS_COUNT_ ==
