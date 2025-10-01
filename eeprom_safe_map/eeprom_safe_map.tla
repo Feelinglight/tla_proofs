@@ -69,7 +69,7 @@ macro add_new_key_tick() begin
     keys_count := keys_count + 1;
 
     if keys_count <= DATA_SECTORS_COUNT then
-      page_buffer := SeqOfNElements(INIT_MEM_VALUE, PageSize);
+      page_buffer := SeqOfNElements(0, PageSize);
       current_sector_page := 0;
       add_new_key_status := "clear_data_sector";
     else
@@ -377,6 +377,7 @@ begin
             end if;
 
             if action = "read_value" then
+              assert test_map[current_key] = actual_value;
               value_buffer := actual_value;
               map_status := "free";
             else
@@ -425,17 +426,14 @@ begin
         end if;
 
       MapTick:
-        either \* clear
-          await map_status = "free";
-        or \* increment_value
+        either \* increment_value
           await map_status = "free";
 
           with
             key \in ALLOWED_KEYS \ {k \in DOMAIN test_map: test_map[k] >= MAX_KEY_VALUE},
             increment \in ALLOWED_MEM_VALUES
           do
-            if ~Contains(keys, increment) /\ keys_count = MAX_KEYS_COUNT then
-              \* assert
+            if ~Contains(keys, key) /\ keys_count = MAX_KEYS_COUNT then
               skip;
             else
               new_value := increment;
@@ -449,10 +447,20 @@ begin
           end with;
         or \* get_value
           await map_status = "free";
-        or \* replace_key
-          await map_status = "free";
-        or \* update_value
-          await map_status = "free";
+
+          with key \in ALLOWED_KEYS do
+            if ~Contains(keys, key) then
+              skip;
+            else
+              if current_key = key /\ ~first_read then
+                assert test_map[key] = actual_value;
+              else
+                change_key(key, "read_value");
+                first_read := FALSE;
+              end if;
+            end if;
+          end with;
+
         end either;
     end while;
 end process;
@@ -460,7 +468,7 @@ end process;
 end algorithm; *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "f0e6d479" /\ chksum(tla) = "7aaae09b")
+\* BEGIN TRANSLATION (chksum(pcal) = "98c0e43e" /\ chksum(tla) = "40cdefb")
 \* Label MapTick of process map at line 291 col 5 changed to MapTick_
 \* Process page_mem at line 155 col 6 changed to page_mem_
 VARIABLES pc, memory_pages, client_init, test_map, update_test_map_data, 
